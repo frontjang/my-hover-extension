@@ -1,0 +1,158 @@
+{
+  "name": "my-hover-extension",
+  "displayName": "My Hover Extension",
+  "description": "Adds extra info to hover previews without replacing built-ins.",
+  "publisher": "ejasung",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:myHoverExtension.openSettings",
+    "onCommand:myHoverExtension.showLastPromptDetails"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "myHoverExtension.openSettings",
+        "title": "My Hover Extension: Open Settings",
+        "category": "My Hover Extension"
+      },
+      {
+        "command": "myHoverExtension.showLastPromptDetails",
+        "title": "My Hover Extension: Show Last Prompt Details",
+        "category": "My Hover Extension"
+      }
+    ],
+    "configuration": {
+      "title": "My Hover Extension",
+      "properties": {
+        "myHoverExtension.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable custom hover previews."
+        },
+        "myHoverExtension.provider": {
+          "type": "string",
+          "enum": ["gemini", "openai", "custom"],
+          "default": "gemini",
+          "description": "Select which AI provider is used to generate explanations.",
+          "markdownDescription": "Determines the service that powers explanations. Options:\n- `gemini` for Google Gemini\n- `openai` for the public OpenAI API\n- `custom` for OpenAI-compatible servers."
+        },
+        "myHoverExtension.geminiEndpoint": {
+          "type": "string",
+          "default": "https://generativelanguage.googleapis.com/v1beta/models",
+          "description": "Base Gemini API URL used to fetch hover explanations.",
+          "markdownDescription": "Base HTTP endpoint for Gemini requests. The extension appends `/<model>:generateContent` using the configured model name."
+        },
+        "myHoverExtension.geminiModel": {
+          "type": "string",
+          "default": "gemini-2.0-flash-lite",
+          "description": "Gemini model name appended to the API URL.",
+          "markdownDescription": "Model identifier used when constructing the Gemini endpoint (e.g. `gemini-1.5-pro`, `gemini-2.0-flash-lite`)."
+        },
+        "myHoverExtension.geminiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key sent with Gemini requests.",
+          "markdownDescription": "Gemini API key that will be transmitted via the `X-Goog-Api-Key` header when requesting explanations.",
+          "scope": "application"
+        },
+        "myHoverExtension.openAiEndpoint": {
+          "type": "string",
+          "default": "https://api.openai.com/v1/chat/completions",
+          "description": "OpenAI Chat Completions endpoint.",
+          "markdownDescription": "OpenAI compatible endpoint (e.g. `https://api.openai.com/v1/chat/completions`)."
+        },
+        "myHoverExtension.openAiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key sent with OpenAI-compatible requests.",
+          "markdownDescription": "Bearer token that will be sent via the `Authorization` header when using OpenAI or custom providers.",
+          "scope": "application"
+        },
+        "myHoverExtension.openAiModel": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Default model used when calling OpenAI-compatible endpoints.",
+          "markdownDescription": "Name of the model to request when using OpenAI or custom providers (e.g. `gpt-4o-mini`, `gpt-3.5-turbo`, or a custom deployment name)."
+        },
+        "myHoverExtension.customEndpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Endpoint for a custom OpenAI-compatible server.",
+          "markdownDescription": "Set this to the base URL of your OpenAI-compatible service, such as `https://my-server.example.com/v1/chat/completions`."
+        },
+        "myHoverExtension.customApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key used for the custom provider.",
+          "markdownDescription": "Bearer token that will be transmitted via the `Authorization` header when using the custom provider.",
+          "scope": "application"
+        },
+        "myHoverExtension.customModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model override for the custom provider.",
+          "markdownDescription": "If your custom provider expects a specific model name, set it here. When omitted the OpenAI model setting will be reused."
+        },
+        "myHoverExtension.systemPrompt": {
+          "type": "string",
+          "default": "You are a friendly assistant that explains programming concepts clearly and concisely.",
+          "description": "System prompt sent to AI providers before the user request.",
+          "markdownDescription": "Text used to prime the AI before the user prompt. Leave empty to skip sending a system prompt.",
+          "scope": "application"
+        },
+        "myHoverExtension.basePromptTemplate": {
+          "type": "string",
+          "default": "Explain the word '{{word}}' in plain language. It was in the line: '{{line}}'.",
+          "description": "Template for the base prompt sent to providers.",
+          "markdownDescription": "Customize the base user prompt sent to the AI provider. Use `{{word}}` for the hovered word and `{{line}}` for the full line of text."
+        },
+        "myHoverExtension.lineContextAugmenters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "fileLineReference"
+          ],
+          "description": "Identifiers of line processors that append supporting context to the prompt.",
+          "markdownDescription": "List of context augmentation modules that run against the hovered line. Each processor can append extra context, such as extracting `file_line` references."
+        },
+        "myHoverExtension.referenceSearchRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional directories that should be searched for reference snippets.",
+          "markdownDescription": "List of folders that will be searched recursively when resolving `file_line` references. Relative paths are resolved against each workspace folder."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "postinstall": "node ./scripts/postinstall.js",
+    "package:python": "python3 ./scripts/package_vsix.py"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0",
+    "tslint": "^6.1.3",
+    "@types/mocha": "^10.0.1",
+    "mocha": "^10.2.0",
+    "@vscode/test-electron": "^2.3.5"
+  }
+}

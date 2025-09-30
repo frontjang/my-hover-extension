@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CustomAIBrowser = exports._shimInitialized = void 0;
+exports.EricAI = exports.EricAIBrowser = exports.CustomAIBrowser = exports._shimInitialized = void 0;
 const CustomAI_1 = require("./CustomAI");
 const browserAuth_1 = require("./browserAuth");
 const browser_shim_1 = require("../browser-shim");
@@ -103,7 +103,34 @@ class CustomAIBrowser extends CustomAI_1.CustomAI {
         this.setAzureAuthToken("");
         (0, customAiDebug_1.logCustomAIDebug)("CustomAIBrowser logout complete");
     }
+    async ericaiHydrateFromRedirect() {
+        (0, customAiDebug_1.logCustomAIDebug)("Legacy EricAI hydrate invoked");
+        await this.customaiHydrateFromRedirect();
+    }
+    async ericaiAuthenticateInBrowser(scopes) {
+        (0, customAiDebug_1.logCustomAIDebug)("Legacy EricAI authenticate invoked", { scopes });
+        if (!scopes) {
+            await this.customaiAuthenticateInBrowser();
+            return;
+        }
+        const filteredScopes = scopes.filter((scope) => !!scope);
+        await this.customaiAuthenticateInBrowser(filteredScopes.length ? filteredScopes : undefined);
+    }
+    ericaiIsAuthenticated() {
+        (0, customAiDebug_1.logCustomAIDebug)("Legacy EricAI auth status check");
+        return this.customaiIsAuthenticated();
+    }
+    ericaiAuthenticatedUser() {
+        (0, customAiDebug_1.logCustomAIDebug)("Legacy EricAI user lookup");
+        return this.customaiAuthenticatedUser();
+    }
+    async ericaiLogout() {
+        (0, customAiDebug_1.logCustomAIDebug)("Legacy EricAI logout invoked");
+        await this.customaiLogout();
+    }
 }
 exports.CustomAIBrowser = CustomAIBrowser;
+exports.EricAIBrowser = CustomAIBrowser;
+exports.EricAI = CustomAIBrowser;
 exports.default = CustomAIBrowser;
 //# sourceMappingURL=index.browser.js.map

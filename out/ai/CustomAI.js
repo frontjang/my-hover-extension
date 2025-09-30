@@ -22,6 +22,102 @@ const openai_1 = require("openai");
 const model_1 = require("../model");
 const env_1 = require("../config/env");
 const customAiDebug_1 = require("./customAiDebug");
+const CERTIFICATE_FILE_EXTENSIONS = new Set([".crt", ".cer", ".pem", ".der", ".p7b", ".pfx"]);
+const DEFAULT_CERTIFICATE_DIRECTORIES = ["EGADCerts", "EGADCerts/certs"];
+const createCertificateLoadSummary = () => ({
+    fileCount: 0,
+    directoryCertificateCount: 0,
+    directoriesSearched: [],
+    directoriesWithCertificates: [],
+    defaultDirectoriesApplied: [],
+    envDirectoriesApplied: [],
+});
+const collectCertificatesFromDirectory = (directoryPath, source, certificates, summary, processedDirectories) => {
+    const resolvedPath = (0, path_1.resolve)(directoryPath);
+    const normalizedPath = resolvedPath.replace(/\\+/g, "/");
+    if (processedDirectories.has(normalizedPath)) {
+        return;
+    }
+    processedDirectories.add(normalizedPath);
+    summary.directoriesSearched.push(normalizedPath);
+    if (!(0, fs_1.existsSync)(resolvedPath)) {
+        (0, customAiDebug_1.logCustomAIDebug)("CustomAI certificate directory not found", {
+            directory: normalizedPath,
+            source,
+        });
+        return;
+    }
+    let stats;
+    try {
+        stats = (0, fs_1.statSync)(resolvedPath);
+    }
+    catch (error) {
+        (0, customAiDebug_1.logCustomAIWarning)("Failed to inspect CustomAI certificate directory", {
+            directory: normalizedPath,
+            source,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+    }
+    if (!stats.isDirectory()) {
+        (0, customAiDebug_1.logCustomAIWarning)("CustomAI certificate path is not a directory", {
+            directory: normalizedPath,
+            source,
+        });
+        return;
+    }
+    let loadedFromDirectory = 0;
+    try {
+        const entries = (0, fs_1.readdirSync)(resolvedPath, { withFileTypes: true });
+        for (const entry of entries) {
+            if (!entry.isFile()) {
+                continue;
+            }
+            const extension = (0, path_1.extname)(entry.name).toLowerCase();
+            if (!CERTIFICATE_FILE_EXTENSIONS.has(extension)) {
+                continue;
+            }
+            const entryPath = (0, path_1.resolve)(resolvedPath, entry.name);
+            try {
+                const contents = (0, fs_1.readFileSync)(entryPath);
+                certificates.push(contents);
+                loadedFromDirectory += 1;
+            }
+            catch (error) {
+                (0, customAiDebug_1.logCustomAIWarning)("Failed to read CustomAI certificate file", {
+                    path: entryPath,
+                    directory: normalizedPath,
+                    source,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+    }
+    catch (error) {
+        (0, customAiDebug_1.logCustomAIWarning)("Failed to enumerate CustomAI certificate directory", {
+            directory: normalizedPath,
+            source,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+    }
+    if (loadedFromDirectory > 0) {
+        summary.directoryCertificateCount += loadedFromDirectory;
+        summary.fileCount += loadedFromDirectory;
+        summary.directoriesWithCertificates.push(normalizedPath);
+        if (source === "default") {
+            summary.defaultDirectoriesApplied.push(normalizedPath);
+        }
+        else {
+            summary.envDirectoriesApplied.push(normalizedPath);
+        }
+    }
+    (0, customAiDebug_1.logCustomAIDebug)("Processed CustomAI certificate directory", {
+        directory: normalizedPath,
+        source,
+        loadedCertificates: loadedFromDirectory,
+    });
+};
 const normalizeCertificateInput = (value) => {
     if (!value) {
         return undefined;
@@ -30,6 +126,8 @@ const normalizeCertificateInput = (value) => {
 };
 const loadCertificatesFromEnv = () => {
     const certificates = [];
+    const summary = createCertificateLoadSummary();
+    const processedDirectories = new Set();
     const inlineCertificates = (0, env_1.getEnvVar)("CUSTOMAI_CA_BUNDLE");
     let hadInlineCertificates = false;
     if (inlineCertificates) {
@@ -37,7 +135,6 @@ const loadCertificatesFromEnv = () => {
         hadInlineCertificates = true;
     }
     const bundlePathRaw = (0, env_1.getEnvVar)("CUSTOMAI_CA_BUNDLE_PATH");
-    let fileCount = 0;
     if (bundlePathRaw) {
         const segments = bundlePathRaw
             .split(path_1.delimiter)
@@ -50,9 +147,15 @@ const loadCertificatesFromEnv = () => {
                 continue;
             }
             try {
-                const contents = (0, fs_1.readFileSync)(resolvedPath);
-                certificates.push(contents);
-                fileCount += 1;
+                const stats = (0, fs_1.statSync)(resolvedPath);
+                if (stats.isDirectory()) {
+                    collectCertificatesFromDirectory(resolvedPath, "env", certificates, summary, processedDirectories);
+                }
+                else {
+                    const contents = (0, fs_1.readFileSync)(resolvedPath);
+                    certificates.push(contents);
+                    summary.fileCount += 1;
+                }
             }
             catch (error) {
                 (0, customAiDebug_1.logCustomAIWarning)("Failed to read CustomAI CA bundle file", {
@@ -62,10 +165,33 @@ const loadCertificatesFromEnv = () => {
             }
         }
     }
+    const directoriesFromEnv = (0, env_1.getEnvVar)("CUSTOMAI_CA_BUNDLE_DIRS");
+    if (directoriesFromEnv) {
+        directoriesFromEnv
+            .split(path_1.delimiter)
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+            .forEach((entry) => collectCertificatesFromDirectory(entry, "env", certificates, summary, processedDirectories));
+    }
+    const extensionRoot = (0, path_1.resolve)(__dirname, "../../");
+    const defaultDirectoryCandidates = new Set();
+    for (const directory of DEFAULT_CERTIFICATE_DIRECTORIES) {
+        defaultDirectoryCandidates.add((0, path_1.resolve)(extensionRoot, directory));
+        defaultDirectoryCandidates.add((0, path_1.resolve)(directory));
+    }
+    for (const directory of defaultDirectoryCandidates) {
+        collectCertificatesFromDirectory(directory, "default", certificates, summary, processedDirectories);
+    }
+    const finalCertificates = certificates.length > 0 ? certificates : undefined;
     return {
-        certificates: certificates.length > 0 ? certificates : undefined,
-        fileCount,
+        certificates: finalCertificates,
+        fileCount: summary.fileCount,
+        directoryCertificateCount: summary.directoryCertificateCount,
         hadInlineCertificates,
+        directoriesSearched: summary.directoriesSearched,
+        directoriesWithCertificates: summary.directoriesWithCertificates,
+        defaultDirectoriesApplied: summary.defaultDirectoriesApplied,
+        envDirectoriesApplied: summary.envDirectoriesApplied,
     };
 };
 const configureUndiciDispatcher = (opts, context) => {
@@ -133,6 +259,12 @@ const resolveNodeAgentOptions = (opts) => {
         httpsAgent,
     };
 };
+const getRequestDebugInfo = (opts) => {
+    const record = opts;
+    const path = typeof record.path === "string" ? record.path : undefined;
+    const method = typeof record.method === "string" ? record.method : undefined;
+    return { path, method };
+};
 __exportStar(require("../model"), exports);
 class CustomAI extends openai_1.default {
     constructor(opts = {}) {
@@ -175,6 +307,11 @@ class CustomAI extends openai_1.default {
             providedCertificates: providedCertificateCount,
             envCertificateFiles: envCertificates?.fileCount ?? 0,
             envInlineCertificates: envCertificates?.hadInlineCertificates ?? false,
+            envDirectoryCertificates: envCertificates?.directoryCertificateCount ?? 0,
+            certificateDirectoriesSearched: envCertificates?.directoriesSearched ?? [],
+            certificateDirectoriesWithCerts: envCertificates?.directoriesWithCertificates ?? [],
+            defaultCertificateDirectoriesApplied: envCertificates?.defaultDirectoriesApplied ?? [],
+            envCertificateDirectoriesApplied: envCertificates?.envDirectoriesApplied ?? [],
             finalCertificateCount: usingCertificates,
             usingProvidedHttpsAgent: !!opts.httpsAgent,
             applyingNodeAgentOptions: !isBrowser,
@@ -220,32 +357,25 @@ class CustomAI extends openai_1.default {
     }
     authHeaders(opts) {
         if (this.azureAuthToken) {
-            (0, customAiDebug_1.logCustomAIDebug)("Applying Azure auth header override", {
-                path: opts.path,
-                method: opts.method,
-            });
+            (0, customAiDebug_1.logCustomAIDebug)("Applying Azure auth header override", getRequestDebugInfo(opts));
             return { Authorization: `Bearer ${this.azureAuthToken}` };
         }
         const headers = super.authHeaders(opts);
-        (0, customAiDebug_1.logCustomAIDebug)("Using default auth headers", {
-            path: opts.path,
-            method: opts.method,
-        });
+        (0, customAiDebug_1.logCustomAIDebug)("Using default auth headers", getRequestDebugInfo(opts));
         return headers;
     }
     defaultHeaders(opts) {
         const headers = super.defaultHeaders(opts);
+        const requestInfo = getRequestDebugInfo(opts);
         if (this.azureAuthToken) {
             delete headers["OpenAI-Organization"];
             delete headers["OpenAI-Project"];
-            (0, customAiDebug_1.logCustomAIDebug)("Removed OpenAI-specific headers due to Azure auth token", {
-                path: opts.path,
-                method: opts.method,
-            });
+            (0, customAiDebug_1.logCustomAIDebug)("Removed OpenAI-specific headers due to Azure auth token", requestInfo);
         }
         (0, customAiDebug_1.logCustomAIDebug)("Computed default headers", {
             hasAzureToken: !!this.azureAuthToken,
             headerKeys: Object.keys(headers ?? {}),
+            ...requestInfo,
         });
         return headers;
     }

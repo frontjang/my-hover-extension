@@ -31,7 +31,7 @@ class BrowserAuthClient {
         (0, customAiDebug_1.logCustomAIDebug)("Initialized BrowserAuthClient", {
             authority: authority.replace(/\/+$/, ""),
             redirectUri: cfg.redirectUri,
-            cacheLocation: config.cache.cacheLocation,
+            cacheLocation: config.cache?.cacheLocation ?? cfg.cacheLocation ?? "sessionStorage",
             defaultScopes: this.defaultScopes,
             interactionType: this.interactionType,
         });

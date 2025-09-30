@@ -120,6 +120,39 @@ export class CustomAIBrowser extends CustomAI {
     this.setAzureAuthToken("");
     logCustomAIDebug("CustomAIBrowser logout complete");
   }
+
+  async ericaiHydrateFromRedirect(): Promise<void> {
+    logCustomAIDebug("Legacy EricAI hydrate invoked");
+    await this.customaiHydrateFromRedirect();
+  }
+
+  async ericaiAuthenticateInBrowser(scopes?: Array<string | undefined>): Promise<void> {
+    logCustomAIDebug("Legacy EricAI authenticate invoked", { scopes });
+    if (!scopes) {
+      await this.customaiAuthenticateInBrowser();
+      return;
+    }
+    const filteredScopes = scopes.filter((scope): scope is string => !!scope);
+    await this.customaiAuthenticateInBrowser(filteredScopes.length ? filteredScopes : undefined);
+  }
+
+  ericaiIsAuthenticated(): boolean {
+    logCustomAIDebug("Legacy EricAI auth status check");
+    return this.customaiIsAuthenticated();
+  }
+
+  ericaiAuthenticatedUser(): string {
+    logCustomAIDebug("Legacy EricAI user lookup");
+    return this.customaiAuthenticatedUser();
+  }
+
+  async ericaiLogout(): Promise<void> {
+    logCustomAIDebug("Legacy EricAI logout invoked");
+    await this.customaiLogout();
+  }
 }
+
+export { CustomAIBrowser as EricAIBrowser };
+export const EricAI: typeof CustomAIBrowser = CustomAIBrowser;
 
 export default CustomAIBrowser;

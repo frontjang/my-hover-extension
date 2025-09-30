@@ -1,10 +1,10 @@
 import { CustomAI } from "./CustomAI";
-import { BrowserAuthClient } from "./auth/browserAuth";
-import { _shimInitialized } from "./browser-shim";
-import { getEnvVar, requireEnvVar } from "./config/env";
+import { BrowserAuthClient } from "./browserAuth";
+import { _shimInitialized } from "../browser-shim";
+import { getEnvVar, requireEnvVar } from "../config/env";
 
-export { type CustomAIModel } from "./model";
-export { _shimInitialized } from "./browser-shim";
+export { type CustomAIModel } from "../model";
+export { _shimInitialized } from "../browser-shim";
 
 export class CustomAIBrowser extends CustomAI {
   private readonly browserAuth: BrowserAuthClient;

@@ -28,8 +28,7 @@
         "${workspaceFolder}/out/**/*.js"
       ],
       "sourceMaps": true,
-      "smartStep": true,
-      "preLaunchTask": "npm: watch"
+      "smartStep": true
     },
     {
       "name": "Extension Tests",

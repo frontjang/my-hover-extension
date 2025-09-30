@@ -1,54 +1,29 @@
-import * as https from 'https';
-import * as vscode from 'vscode';
-import { ChatMessage, ProviderSelection, PROVIDER_LABELS } from './types';
+const https = require('https');
+const { PROVIDER_LABELS } = require('./types');
 
-type OpenAIChoice = {
-  message?: {
-    content?: string;
-  };
-};
-
-interface OpenAIResponse {
-  choices?: OpenAIChoice[];
-}
-
-export interface OpenAIExplanationResult {
-  text?: string;
-  error?: string;
-}
-
-function coerceOpenAIErrorMessage(
-  provider: ProviderSelection,
-  statusCode: number | undefined,
-  body: string
-): string {
+function coerceOpenAIErrorMessage(provider, statusCode, body) {
   if (!body) {
     return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}.`;
   }
 
   try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } };
-    const message = parsed.error?.message?.trim();
+    const parsed = JSON.parse(body);
+    const message = parsed?.error?.message?.trim();
 
     if (message) {
       return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}: ${message}`;
     }
-  } catch (parseError) {
+  } catch (error) {
     // Ignore JSON parse errors and fall back to the raw body below.
   }
 
   const sanitized = body.length > 500 ? `${body.slice(0, 497)}...` : body;
-  return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}: ${sanitized.trim() || 'Unknown error.'}`;
+  return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}: ${
+    sanitized.trim() || 'Unknown error.'
+  }`;
 }
 
-export async function fetchOpenAIStyleExplanation(
-  messages: ChatMessage[],
-  endpoint: string,
-  apiKey: string,
-  model: string,
-  token: vscode.CancellationToken,
-  provider: ProviderSelection
-): Promise<OpenAIExplanationResult> {
+async function fetchOpenAIStyleExplanation(messages, endpoint, apiKey, model, token, provider) {
   if (messages.length === 0) {
     return { error: 'Prompt did not include any messages.' };
   }
@@ -72,7 +47,7 @@ export async function fetchOpenAIStyleExplanation(
 
   const url = new URL(endpoint);
 
-  return new Promise<OpenAIExplanationResult>((resolve) => {
+  return new Promise((resolve) => {
     const req = https.request(
       url,
       {
@@ -84,7 +59,7 @@ export async function fetchOpenAIStyleExplanation(
         }
       },
       (res) => {
-        const chunks: Buffer[] = [];
+        const chunks = [];
 
         res.on('data', (chunk) => {
           chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
@@ -95,11 +70,15 @@ export async function fetchOpenAIStyleExplanation(
 
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             try {
-              const json = JSON.parse(body) as OpenAIResponse;
+              const json = JSON.parse(body);
               const choice = json.choices?.find((c) => !!c.message?.content);
               const text = choice?.message?.content?.trim();
 
-              resolve(text ? { text } : { error: `${PROVIDER_LABELS[provider]} returned an empty response.` });
+              resolve(
+                text
+                  ? { text }
+                  : { error: `${PROVIDER_LABELS[provider]} returned an empty response.` }
+              );
             } catch (error) {
               console.error(
                 `[MyHoverExtension] Failed to parse ${PROVIDER_LABELS[provider]} response:`,
@@ -135,3 +114,7 @@ export async function fetchOpenAIStyleExplanation(
     req.end();
   });
 }
+
+module.exports = {
+  fetchOpenAIStyleExplanation
+};

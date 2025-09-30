@@ -1,26 +1,19 @@
-import * as path from 'path';
-import * as vscode from 'vscode';
-import {
+const path = require('path');
+const vscode = require('vscode');
+const {
   FileContextResolver,
-  LineProcessorRegistry,
   createDefaultLineProcessorRegistry,
   parseFileLineReference,
   FILE_LINE_PATTERN
-} from './prompts';
-import {
-  ProviderConfig,
-  ProviderSelection,
-  PROVIDER_LABELS,
-  getProviderConfig
-} from './ai/types';
-import {
-  ProviderExplanationResult,
+} = require('./prompts');
+const { PROVIDER_LABELS, getProviderConfig } = require('./ai/types');
+const {
   resolveGeminiExplanation,
   resolveOpenAIStyleExplanation
-} from './ai/explanations';
-import { getLastPromptSession } from './promptSessions';
+} = require('./ai/explanations');
+const { getLastPromptSession } = require('./promptSessions');
 
-function shouldWarnForProvider(config: ProviderConfig): boolean {
+function shouldWarnForProvider(config) {
   if (config.provider === 'gemini') {
     return !config.geminiApiKey;
   }
@@ -36,7 +29,7 @@ function shouldWarnForProvider(config: ProviderConfig): boolean {
   return false;
 }
 
-async function promptForConfiguration(): Promise<void> {
+async function promptForConfiguration() {
   const selection = await vscode.window.showInformationMessage(
     'My Hover Extension requires an API key for the selected provider.',
     'Open Settings'
@@ -47,7 +40,7 @@ async function promptForConfiguration(): Promise<void> {
   }
 }
 
-function createCommandLinksMarkdown(): string {
+function createCommandLinksMarkdown() {
   const links = [
     '[⚙️ Configure extension](command:myHoverExtension.openSettings)',
     '[📝 View last prompt](command:myHoverExtension.showLastPromptDetails)'
@@ -56,10 +49,7 @@ function createCommandLinksMarkdown(): string {
   return links.join(' • ');
 }
 
-function formatMissingConfigurationMessage(
-  providerLabel: string,
-  missingParts: string[]
-): string {
+function formatMissingConfigurationMessage(providerLabel, missingParts) {
   if (missingParts.length === 0) {
     return `${providerLabel} configuration is incomplete. Use the settings button below to update the extension.`;
   }
@@ -72,16 +62,11 @@ function formatMissingConfigurationMessage(
   return `${providerLabel} configuration is missing the ${formattedParts}. Use the settings button below to update the extension.`;
 }
 
-interface PromptDependencies {
-  resolver: FileContextResolver;
-  registry: LineProcessorRegistry;
-}
-
-function resolveReferenceRoots(config: ProviderConfig): string[] {
+function resolveReferenceRoots(config) {
   const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
   const roots = new Set<string>();
 
-  const addRoot = (candidate: string) => {
+  const addRoot = (candidate) => {
     if (!candidate) {
       return;
     }
@@ -109,7 +94,7 @@ function resolveReferenceRoots(config: ProviderConfig): string[] {
   return Array.from(roots);
 }
 
-function createPromptDependencies(config: ProviderConfig): PromptDependencies {
+function createPromptDependencies(config) {
   const roots = resolveReferenceRoots(config);
 
   console.log(
@@ -124,10 +109,7 @@ function createPromptDependencies(config: ProviderConfig): PromptDependencies {
   return { resolver, registry };
 }
 
-async function resolveDefinitionReference(
-  lineText: string,
-  resolver: FileContextResolver
-): Promise<vscode.Location | undefined> {
+async function resolveDefinitionReference(lineText, resolver) {
   const match = FILE_LINE_PATTERN.exec(lineText);
 
   if (!match) {
@@ -159,7 +141,7 @@ async function resolveDefinitionReference(
   return new vscode.Location(uri, position);
 }
 
-export function activate(context: vscode.ExtensionContext) {
+function activate(context) {
   const configuration = vscode.workspace.getConfiguration('myHoverExtension');
   const providerConfig = getProviderConfig(configuration);
 
@@ -167,7 +149,7 @@ export function activate(context: vscode.ExtensionContext) {
     void promptForConfiguration();
   }
 
-  if (!configuration.get<boolean>('enable')) {
+  if (!configuration.get('enable')) {
     return;
   }
 
@@ -192,7 +174,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       const providerLabel = PROVIDER_LABELS[session.provider];
       const timestamp = new Date(session.timestamp).toLocaleString();
-      const lines: string[] = [
+      const lines = [
         '# My Hover Extension prompt details',
         '',
         `- **Provider:** ${providerLabel}`,
@@ -263,7 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         resolvingBuiltInHover = true;
 
-        let builtInHovers: vscode.Hover[] | undefined;
+        let builtInHovers;
 
         try {
           console.log('[MyHoverExtension] Resolving built-in hover results...');
@@ -282,7 +264,7 @@ export function activate(context: vscode.ExtensionContext) {
         const wordRange = document.getWordRangeAtPosition(position);
         const hoveredWord = wordRange ? document.getText(wordRange) : undefined;
         const lineText = document.lineAt(position.line).text;
-        let providerExplanation: ProviderExplanationResult | undefined;
+        let providerExplanation;
 
         const refreshedConfig = getProviderConfig(
           vscode.workspace.getConfiguration('myHoverExtension')
@@ -293,7 +275,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (hoveredWord && !token.isCancellationRequested) {
           try {
             if (refreshedConfig.provider === 'gemini') {
-              const missing: string[] = [];
+              const missing = [];
 
               if (!refreshedConfig.geminiEndpoint) {
                 missing.push('endpoint');
@@ -341,7 +323,7 @@ export function activate(context: vscode.ExtensionContext) {
                 };
               }
             } else if (refreshedConfig.provider === 'openai') {
-              const missing: string[] = [];
+              const missing = [];
 
               if (!refreshedConfig.openAiEndpoint) {
                 missing.push('endpoint');
@@ -393,7 +375,7 @@ export function activate(context: vscode.ExtensionContext) {
                 };
               }
             } else if (refreshedConfig.provider === 'custom') {
-              const missing: string[] = [];
+              const missing = [];
               const chosenModel = refreshedConfig.customModel || refreshedConfig.openAiModel;
 
               if (!refreshedConfig.customEndpoint) {
@@ -456,7 +438,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const commandLinks = createCommandLinksMarkdown();
-        const extensionContents: vscode.MarkdownString[] = [];
+        const extensionContents = [];
 
         if (providerExplanation?.text) {
           extensionContents.push(new vscode.MarkdownString(providerExplanation.text));
@@ -510,7 +492,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         resolvingBuiltInDefinition = true;
 
-        let builtInDefs: vscode.Location[] | undefined;
+        let builtInDefs;
 
         try {
           console.log('[MyHoverExtension] Resolving built-in definitions...');
@@ -526,7 +508,7 @@ export function activate(context: vscode.ExtensionContext) {
           resolvingBuiltInDefinition = false;
         }
 
-        const results: vscode.Location[] = [];
+        const results = [];
 
         if (builtInDefs && builtInDefs.length > 0) {
           results.push(...builtInDefs);
@@ -554,4 +536,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(hoverProvider, defProvider, openSettingsCommand, showLastPromptCommand);
 }
 
-export function deactivate() {}
+function deactivate() {}
+
+module.exports = {
+  activate,
+  deactivate
+};

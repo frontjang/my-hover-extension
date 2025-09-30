@@ -39,10 +39,10 @@
         },
         "myHoverExtension.provider": {
           "type": "string",
-          "enum": ["gemini", "openai", "custom"],
+          "enum": ["gemini", "openai", "custom", "customAI"],
           "default": "gemini",
           "description": "Select which AI provider is used to generate explanations.",
-          "markdownDescription": "Determines the service that powers explanations. Options:\n- `gemini` for Google Gemini\n- `openai` for the public OpenAI API\n- `custom` for OpenAI-compatible servers."
+          "markdownDescription": "Determines the service that powers explanations. Options:\n- `gemini` for Google Gemini\n- `openai` for the public OpenAI API\n- `custom` for OpenAI-compatible servers configured via settings\n- `customAI` for servers configured through environment variables (see `.env`)."
         },
         "myHoverExtension.geminiEndpoint": {
           "type": "string",

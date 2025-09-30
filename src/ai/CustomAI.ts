@@ -3,8 +3,8 @@ import type { Buffer } from "node:buffer";
 import type { ClientOptions } from "openai";
 import type { FinalRequestOptions } from "openai/core";
 
-import { CustomAIModels } from "./model";
-import { getEnvVar, getEnvVarBoolean, getEnvVarNumber, requireEnvVar } from "./config/env";
+import { CustomAIModels } from "../model";
+import { getEnvVar, getEnvVarBoolean, getEnvVarNumber, requireEnvVar } from "../config/env";
 
 export interface CustomAIOptions extends ClientOptions {
   disableSSLVerification?: boolean;
@@ -12,7 +12,7 @@ export interface CustomAIOptions extends ClientOptions {
   disableAutoCertLoading?: boolean;
 }
 
-export * from "./model";
+export * from "../model";
 
 export class CustomAI extends OpenAI {
   protected azureAuthToken: string | null = null;

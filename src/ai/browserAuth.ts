@@ -7,6 +7,8 @@ import type {
 } from "@azure/msal-browser";
 import type { AccountInfo, AuthenticationResult } from "@azure/msal-browser";
 
+import { logCustomAIDebug, logCustomAIWarning } from "./customAiDebug";
+
 export type InteractionType = "popup" | "redirect";
 
 export interface BrowserAuthConfig {
@@ -51,20 +53,36 @@ export class BrowserAuthClient {
     this.msal = new PublicClientApplication(config);
     this.defaultScopes = cfg.defaultScopes ?? [];
     this.interactionType = cfg.interactionType ?? "popup";
+
+    logCustomAIDebug("Initialized BrowserAuthClient", {
+      authority: authority.replace(/\/+$/, ""),
+      redirectUri: cfg.redirectUri,
+      cacheLocation: config.cache.cacheLocation,
+      defaultScopes: this.defaultScopes,
+      interactionType: this.interactionType,
+    });
   }
 
   async initialize(): Promise<void> {
     if (this.isInitialized) {
+      logCustomAIDebug("BrowserAuthClient already initialized");
       return;
     }
 
     try {
+      logCustomAIDebug("Initializing MSAL PublicClientApplication");
       await this.msal.initialize();
       this.isInitialized = true;
       const accounts = this.msal.getAllAccounts();
       this.account = accounts[0] ?? null;
+      logCustomAIDebug("MSAL initialization complete", {
+        accountCount: accounts.length,
+        authenticatedUser: this.account?.username,
+      });
     } catch (error) {
-      console.error("MSAL initialization failed:", error);
+      logCustomAIWarning("MSAL initialization failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
@@ -74,21 +92,35 @@ export class BrowserAuthClient {
       await this.initialize();
     }
 
+    logCustomAIDebug("Hydrating CustomAI auth from redirect");
     const res = await this.msal.handleRedirectPromise();
     if (res?.account) {
       this.account = res.account;
+      logCustomAIDebug("Redirect hydration found account", {
+        username: this.account.username,
+      });
     }
     if (!this.account) {
       const accounts = this.msal.getAllAccounts();
       this.account = accounts[0] ?? null;
+      logCustomAIDebug("Fallback account lookup after redirect", {
+        accountCount: accounts.length,
+        username: this.account?.username,
+      });
     }
   }
 
   isAuthenticated(): boolean {
+    logCustomAIDebug("Checking CustomAI authentication state", {
+      isAuthenticated: !!this.account,
+    });
     return !!this.account;
   }
 
   getAccount(): AccountInfo | null {
+    logCustomAIDebug("Retrieving CustomAI account details", {
+      username: this.account?.username,
+    });
     return this.account;
   }
 
@@ -98,27 +130,55 @@ export class BrowserAuthClient {
     }
 
     const effectiveScopes = scopes?.length ? scopes : this.defaultScopes;
+    logCustomAIDebug("Authenticating with CustomAI", {
+      scopes: effectiveScopes,
+      hasCachedAccount: !!this.account,
+      interactionType: this.interactionType,
+    });
 
     if (this.account) {
       try {
         const req: SilentRequest = { account: this.account, scopes: effectiveScopes };
-        return await this.msal.acquireTokenSilent(req);
+        const silentResult = await this.msal.acquireTokenSilent(req);
+        logCustomAIDebug("Silent token acquisition succeeded", {
+          username: silentResult.account?.username,
+          expiresOn: silentResult.expiresOn?.toISOString(),
+        });
+        return silentResult;
       } catch (silentError) {
-        console.warn("Silent token acquisition failed:", silentError);
+        logCustomAIWarning("Silent token acquisition failed", {
+          error:
+            silentError instanceof Error ? silentError.message : String(silentError),
+        });
       }
     }
 
     const req: PopupRequest & RedirectRequest = { scopes: effectiveScopes };
-    const res =
-      this.interactionType === "redirect"
-        ? await this.loginRedirectThenAwait(req)
-        : await this.msal.loginPopup(req);
+    let res: AuthenticationResult;
+    if (this.interactionType === "redirect") {
+      logCustomAIDebug("Starting redirect-based CustomAI authentication");
+      res = await this.loginRedirectThenAwait(req);
+    } else {
+      logCustomAIDebug("Starting popup-based CustomAI authentication");
+      res = await this.msal.loginPopup(req);
+    }
     this.account = res.account ?? null;
+    logCustomAIDebug("Interactive CustomAI authentication completed", {
+      username: this.account?.username,
+      hasAccount: !!this.account,
+    });
     return res;
   }
 
   async getAccessToken(scopes?: string[]): Promise<string> {
+    logCustomAIDebug("Requesting CustomAI access token", {
+      scopes: scopes ?? this.defaultScopes,
+    });
     const res = await this.authenticate(scopes);
+    logCustomAIDebug("Access token retrieved for CustomAI", {
+      hasToken: !!res.accessToken,
+      expiresOn: res.expiresOn?.toISOString(),
+    });
     return res.accessToken;
   }
 
@@ -127,12 +187,14 @@ export class BrowserAuthClient {
       await this.initialize();
     }
 
+    logCustomAIDebug("Logging out of CustomAI");
     if (this.interactionType === "redirect") {
       await this.msal.logoutRedirect();
     } else {
       await this.msal.logoutPopup();
     }
     this.account = null;
+    logCustomAIDebug("CustomAI logout completed");
   }
 
   private async loginRedirectThenAwait(req: RedirectRequest, isAcquire = false) {
@@ -141,14 +203,19 @@ export class BrowserAuthClient {
     }
 
     if (isAcquire) {
+      logCustomAIDebug("Acquiring token via redirect flow");
       await this.msal.acquireTokenRedirect(req);
     } else {
+      logCustomAIDebug("Initiating login redirect flow");
       await this.msal.loginRedirect(req);
     }
     const res = await this.msal.handleRedirectPromise();
     if (!res) {
       throw new Error("Redirect initiated. Call hydrateFromRedirect() on startup.");
     }
+    logCustomAIDebug("Redirect flow returned authentication result", {
+      username: res.account?.username,
+    });
     return res;
   }
 }

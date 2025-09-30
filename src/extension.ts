@@ -13,7 +13,12 @@ import {
   PROVIDER_LABELS,
   getProviderConfig
 } from './ai/types';
-import { getCustomAIEnvironmentConfig, getCustomAIMissingParts } from './ai/customEnv';
+import {
+  buildCustomAIAuthorizationUrl,
+  getCustomAIEnvironmentConfig,
+  getCustomAIMissingParts,
+} from './ai/customEnv';
+import { logCustomAIDebug } from './ai/customAiDebug';
 import {
   ProviderExplanationResult,
   resolveGeminiExplanation,
@@ -44,9 +49,7 @@ function shouldWarnForProvider(config: ProviderConfig): boolean {
 
 async function promptForConfiguration(provider?: ProviderSelection): Promise<void> {
   if (provider === 'customAI') {
-    await vscode.window.showInformationMessage(
-      'My Hover Extension requires environment variables for the CustomAI provider. Update your .env file and reload VS Code.'
-    );
+    await promptForCustomAIConfiguration();
     return;
   }
 
@@ -56,6 +59,90 @@ async function promptForConfiguration(provider?: ProviderSelection): Promise<voi
   );
 
   if (selection === 'Open Settings') {
+    await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
+  }
+}
+
+async function openCustomAIAuthorizationInBrowser(showSuccessMessage = true): Promise<boolean> {
+  const details = buildCustomAIAuthorizationUrl();
+
+  if (!details.url) {
+    const missingText =
+      details.missing.length > 0
+        ? `Missing values: ${details.missing.join(', ')}.`
+        : 'The authorization URL could not be constructed.';
+    logCustomAIDebug('Unable to open CustomAI authorization URL from VS Code', {
+      missing: details.missing,
+    });
+    await vscode.window.showErrorMessage(
+      `CustomAI authentication could not be started. ${missingText}`
+    );
+    return false;
+  }
+
+  try {
+    const uri = vscode.Uri.parse(details.url);
+    await vscode.env.openExternal(uri);
+    logCustomAIDebug('Opened system browser for CustomAI authentication', {
+      scheme: uri.scheme,
+      authority: uri.authority,
+      path: uri.path,
+    });
+    if (showSuccessMessage) {
+      void vscode.window.showInformationMessage(
+        'A browser window was opened for CustomAI authentication. Complete the sign-in flow and return to VS Code.'
+      );
+    }
+    return true;
+  } catch (error) {
+    logCustomAIDebug('Failed to open CustomAI authorization URL', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await vscode.window.showErrorMessage(
+      'CustomAI authentication could not be opened in your browser. See logs for details.'
+    );
+    return false;
+  }
+}
+
+async function promptForCustomAIConfiguration(): Promise<void> {
+  const details = buildCustomAIAuthorizationUrl();
+  const missingText =
+    details.missing.length > 0
+      ? `Missing values: ${details.missing.join(', ')}.`
+      : undefined;
+  const actions: string[] = [];
+
+  if (details.url) {
+    actions.push('Open Browser');
+  }
+  actions.push('Open Settings');
+
+  const messageParts = [
+    'My Hover Extension requires environment variables for the CustomAI provider. Update your .env file and reload VS Code.',
+  ];
+
+  if (details.url) {
+    messageParts.push('If authentication is required, open the browser to sign in.');
+  }
+
+  if (missingText) {
+    messageParts.push(missingText);
+  }
+
+  logCustomAIDebug('Prompting user to configure CustomAI provider', {
+    hasAuthorizationUrl: !!details.url,
+    missing: details.missing,
+  });
+
+  const selection = await vscode.window.showInformationMessage(
+    messageParts.join(' '),
+    ...actions
+  );
+
+  if (selection === 'Open Browser') {
+    await openCustomAIAuthorizationInBrowser(false);
+  } else if (selection === 'Open Settings') {
     await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
   }
 }
@@ -255,6 +342,13 @@ export function activate(context: vscode.ExtensionContext) {
       });
 
       await vscode.window.showTextDocument(document, { preview: true });
+    }
+  );
+
+  const openCustomAiAuthCommand = vscode.commands.registerCommand(
+    'myHoverExtension.customAI.openAuthentication',
+    async () => {
+      await openCustomAIAuthorizationInBrowser();
     }
   );
 
@@ -617,7 +711,13 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
-  context.subscriptions.push(hoverProvider, defProvider, openSettingsCommand, showLastPromptCommand);
+  context.subscriptions.push(
+    hoverProvider,
+    defProvider,
+    openSettingsCommand,
+    showLastPromptCommand,
+    openCustomAiAuthCommand
+  );
 }
 
 export function deactivate() {}

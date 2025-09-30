@@ -5,6 +5,7 @@ import type { FinalRequestOptions } from "openai/core";
 
 import { CustomAIModels } from "../model";
 import { getEnvVar, getEnvVarBoolean, getEnvVarNumber, requireEnvVar } from "../config/env";
+import { logCustomAIDebug, redactSecret } from "./customAiDebug";
 
 export interface CustomAIOptions extends ClientOptions {
   disableSSLVerification?: boolean;
@@ -23,6 +24,11 @@ export class CustomAI extends OpenAI {
   constructor(opts: CustomAIOptions = {}) {
     const globalRef = typeof globalThis === "object" ? (globalThis as Record<string, unknown>) : {};
     const isBrowser = typeof globalRef.window !== "undefined";
+    logCustomAIDebug("Constructing CustomAI client", {
+      runtime: isBrowser ? "browser" : "node",
+      hasFetch: typeof globalRef.fetch === "function",
+      hasWindow: isBrowser,
+    });
     const browserOptions = isBrowser
       ? {
           httpAgent: undefined,
@@ -37,6 +43,15 @@ export class CustomAI extends OpenAI {
     const baseURL = opts.baseURL ?? getEnvVar("CUSTOMAI_BASE_URL");
     const dangerouslyAllowBrowser =
       opts.dangerouslyAllowBrowser ?? getEnvVarBoolean("CUSTOMAI_ALLOW_BROWSER", true);
+
+    logCustomAIDebug("Resolved CustomAI constructor options", {
+      baseURL,
+      timeout,
+      maxRetries,
+      dangerouslyAllowBrowser,
+      apiKey: redactSecret(apiKey),
+      defaultScope: CustomAI.defaultScope,
+    });
 
     super({
       ...opts,
@@ -55,17 +70,32 @@ export class CustomAI extends OpenAI {
       writable: false,
       configurable: false,
     });
+
+    logCustomAIDebug("CustomAI client initialized");
   }
 
   setAzureAuthToken(token: string) {
     this.azureAuthToken = token;
+    logCustomAIDebug("Azure auth token updated", {
+      hasToken: !!token,
+      tokenLength: token?.length ?? 0,
+    });
   }
 
   protected override authHeaders(opts: FinalRequestOptions): Record<string, string | null | undefined> {
     if (this.azureAuthToken) {
+      logCustomAIDebug("Applying Azure auth header override", {
+        path: opts.path,
+        method: opts.method,
+      });
       return { Authorization: `Bearer ${this.azureAuthToken}` };
     }
-    return super.authHeaders(opts);
+    const headers = super.authHeaders(opts);
+    logCustomAIDebug("Using default auth headers", {
+      path: opts.path,
+      method: opts.method,
+    });
+    return headers;
   }
 
   protected override defaultHeaders(opts: FinalRequestOptions): Record<string, string | null | undefined> {
@@ -73,7 +103,15 @@ export class CustomAI extends OpenAI {
     if (this.azureAuthToken) {
       delete headers["OpenAI-Organization"];
       delete headers["OpenAI-Project"];
+      logCustomAIDebug("Removed OpenAI-specific headers due to Azure auth token", {
+        path: opts.path,
+        method: opts.method,
+      });
     }
+    logCustomAIDebug("Computed default headers", {
+      hasAzureToken: !!this.azureAuthToken,
+      headerKeys: Object.keys(headers ?? {}),
+    });
     return headers;
   }
 }

@@ -1,6 +1,14 @@
-const FILE_LINE_PATTERN = /file_line\s*=\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i;
+import { FileContextResolver } from '../fileContextResolver';
+import { LineProcessor, LineProcessorParams } from '../types';
 
-function parseFileLineReference(reference) {
+export interface ParsedFileLineReference {
+  readonly filePath: string;
+  readonly line: number;
+}
+
+export const FILE_LINE_PATTERN = /file_line\s*=\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i;
+
+export function parseFileLineReference(reference: string): ParsedFileLineReference | undefined {
   const trimmed = reference.trim();
 
   if (!trimmed) {
@@ -25,13 +33,12 @@ function parseFileLineReference(reference) {
   return { filePath, line: parsedLine };
 }
 
-class FileLineReferenceProcessor {
-  constructor(resolver) {
-    this.id = 'fileLineReference';
-    this.resolver = resolver;
-  }
+export class FileLineReferenceProcessor implements LineProcessor {
+  readonly id = 'fileLineReference';
 
-  async process({ lineText }) {
+  constructor(private readonly resolver: FileContextResolver) {}
+
+  async process({ lineText }: LineProcessorParams): Promise<string | undefined> {
     const match = FILE_LINE_PATTERN.exec(lineText);
 
     if (!match) {
@@ -61,8 +68,3 @@ class FileLineReferenceProcessor {
   }
 }
 
-module.exports = {
-  FILE_LINE_PATTERN,
-  parseFileLineReference,
-  FileLineReferenceProcessor
-};

@@ -1,10 +1,23 @@
-function applyTemplate(template, word, line) {
+import { ProviderConfig } from '../ai/types';
+import { LineProcessorRegistry } from './registry';
+
+export interface PromptPayload {
+  systemPrompt?: string;
+  userPrompt: string;
+}
+
+function applyTemplate(template: string, word: string, line: string): string {
   return template
     .replace(/\{\{\s*word\s*\}\}/gi, word)
     .replace(/\{\{\s*line\s*\}\}/gi, line);
 }
 
-async function buildPromptPayload(word, lineText, config, registry) {
+export async function buildPromptPayload(
+  word: string,
+  lineText: string | undefined,
+  config: ProviderConfig,
+  registry: LineProcessorRegistry
+): Promise<PromptPayload> {
   const trimmedWord = word.trim();
   const trimmedLine = (lineText ?? '').trim();
   const systemPrompt = config.systemPrompt.trim() || undefined;
@@ -14,7 +27,7 @@ async function buildPromptPayload(word, lineText, config, registry) {
     ? applyTemplate(baseTemplate, trimmedWord, trimmedLine)
     : `Explain the word "${trimmedWord}" in plain language.`;
 
-  const promptLines = [baseInstruction];
+  const promptLines: string[] = [baseInstruction];
 
   if (trimmedLine && config.lineContextAugmenters.length > 0) {
     const contexts = await registry.collect(
@@ -34,7 +47,3 @@ async function buildPromptPayload(word, lineText, config, registry) {
     userPrompt: prompt
   };
 }
-
-module.exports = {
-  buildPromptPayload
-};

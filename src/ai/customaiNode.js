@@ -1,3 +1,4 @@
+const http = require('http');
 const https = require('https');
 
 function resolveOptionalModule(paths) {
@@ -33,29 +34,29 @@ function pickExport(mod) {
   return mod;
 }
 
-function createMissingEricAI() {
-  class EricAIPlaceholder {
-    static defaultScope = 'api://eric.ai/.default';
+function createMissingCustomAI() {
+  class CustomAIPlaceholder {
+    static defaultScope = 'api://custom.ai/.default';
 
     constructor() {
       throw new Error(
-        "EricAINode requires an EricAI implementation. Ensure one of './EricAI', './ericAI', '../EricAI', or '../ericAI' is available."
+        "CustomAINode requires a CustomAI implementation. Ensure one of './CustomAI', './customAI', '../CustomAI', or '../customAI' is available."
       );
     }
 
     setAzureAuthToken() {
-      throw new Error('EricAI implementation missing.');
+      throw new Error('CustomAI implementation missing.');
     }
   }
 
-  return EricAIPlaceholder;
+  return CustomAIPlaceholder;
 }
 
 function createMissingAzureAuthClient() {
   return class AzureAuthClientPlaceholder {
     constructor() {
       throw new Error(
-        "EricAINode requires an AzureAuthClient implementation. Provide one of '../azureAuthClient', './azureAuthClient', '../auth/azureAuthClient', or './auth/azureAuthClient'."
+        "CustomAINode requires an AzureAuthClient implementation. Provide one of '../azureAuthClient', './azureAuthClient', '../auth/azureAuthClient', or './auth/azureAuthClient'."
       );
     }
 
@@ -77,13 +78,14 @@ function createMissingAzureAuthClient() {
   };
 }
 
-const EricAIModule = resolveOptionalModule([
-  './EricAI',
-  './ericAI',
-  '../EricAI',
-  '../ericAI'
-]);
-const EricAIBase = EricAIModule ? pickExport(EricAIModule) : createMissingEricAI();
+const CustomAIModule =
+  resolveOptionalModule([
+    './CustomAI',
+    './customAI',
+    '../CustomAI',
+    '../customAI'
+  ]);
+const CustomAIBase = CustomAIModule ? pickExport(CustomAIModule) : createMissingCustomAI();
 
 const AzureAuthModule = resolveOptionalModule([
   '../azureAuthClient',
@@ -99,27 +101,37 @@ const certificatesModule = resolveOptionalModule([
   '../utils/certificates',
   './utils/certificates'
 ]);
-const loadBundledCertificates = certificatesModule
-  ? pickExport(certificatesModule)
-  : () => [];
+const loadBundledCertificates = certificatesModule ? pickExport(certificatesModule) : () => [];
 
-const constantsModule = resolveOptionalModule([
-  '../ericaiConstants',
-  './ericaiConstants',
-  '../constants/ericai',
-  './constants/ericai',
-  '../constants',
-  './constants'
-]) || {};
+const constantsModule =
+  resolveOptionalModule([
+    '../customaiConstants',
+    './customaiConstants',
+    '../constants/customai',
+    './constants/customai',
+    '../constants',
+    './constants'
+  ]) || {};
 
-const ERI_CLIENT_ID =
-  constantsModule.ERI_CLIENT_ID ?? process.env.ERI_CLIENT_ID ?? '';
-const ERI_TENANT_ID =
-  constantsModule.ERI_TENANT_ID ?? process.env.ERI_TENANT_ID ?? '';
-const ERI_AUTHORITY =
-  constantsModule.ERI_AUTHORITY ?? process.env.ERI_AUTHORITY;
+const CUSTOMAI_CLIENT_ID =
+  constantsModule.CUSTOMAI_CLIENT_ID ??
+  constantsModule.ERI_CLIENT_ID ??
+  process.env.CUSTOMAI_CLIENT_ID ??
+  process.env.ERI_CLIENT_ID ??
+  '';
+const CUSTOMAI_TENANT_ID =
+  constantsModule.CUSTOMAI_TENANT_ID ??
+  constantsModule.ERI_TENANT_ID ??
+  process.env.CUSTOMAI_TENANT_ID ??
+  process.env.ERI_TENANT_ID ??
+  '';
+const CUSTOMAI_AUTHORITY =
+  constantsModule.CUSTOMAI_AUTHORITY ??
+  constantsModule.ERI_AUTHORITY ??
+  process.env.CUSTOMAI_AUTHORITY ??
+  process.env.ERI_AUTHORITY;
 
-class EricAINode extends EricAIBase {
+class CustomAINode extends CustomAIBase {
   constructor(options = {}) {
     const {
       disableSSLVerification,
@@ -128,13 +140,12 @@ class EricAINode extends EricAIBase {
       ...clientOptions
     } = options;
 
-    let agent;
     let finalCAs;
+    let httpsAgent;
+    let httpAgent;
 
     if (caCertificates) {
-      finalCAs = Array.isArray(caCertificates)
-        ? caCertificates
-        : [caCertificates];
+      finalCAs = Array.isArray(caCertificates) ? caCertificates : [caCertificates];
     } else if (!disableAutoCertLoading) {
       const bundled = loadBundledCertificates();
       if (Array.isArray(bundled) && bundled.length) {
@@ -150,50 +161,63 @@ class EricAINode extends EricAIBase {
       if (finalCAs) {
         agentOptions.ca = finalCAs;
       }
-      agent = new https.Agent(agentOptions);
+      httpsAgent = new https.Agent(agentOptions);
+      httpAgent = new http.Agent();
     }
 
-    super({ httpAgent: agent, ...clientOptions });
+    const superOptions = { ...clientOptions };
+
+    if (httpAgent && !superOptions.httpAgent) {
+      superOptions.httpAgent = httpAgent;
+    }
+    if (httpsAgent && !superOptions.httpsAgent) {
+      superOptions.httpsAgent = httpsAgent;
+    }
+    if (httpsAgent && !superOptions.httpAgent) {
+      superOptions.httpAgent = httpsAgent;
+    }
+
+    super(superOptions);
 
     const authConfig = {
-      clientId: ERI_CLIENT_ID,
-      tenantId: ERI_TENANT_ID
+      clientId: CUSTOMAI_CLIENT_ID,
+      tenantId: CUSTOMAI_TENANT_ID
     };
-    if (ERI_AUTHORITY) {
-      authConfig.authority = ERI_AUTHORITY;
+    if (CUSTOMAI_AUTHORITY) {
+      authConfig.authority = CUSTOMAI_AUTHORITY;
     }
 
     this.nodeAuth = new AzureAuthClient(authConfig);
   }
 
-  async ericaiAuthenticateInTerminal(scopes = [EricAIBase.defaultScope]) {
-    const effectiveScopes = scopes && scopes.length ? scopes : [EricAIBase.defaultScope];
+  async customaiAuthenticateInTerminal(scopes = [CustomAIBase.defaultScope]) {
+    const effectiveScopes = scopes && scopes.length ? scopes : [CustomAIBase.defaultScope];
     const res = await this.nodeAuth.authenticateWithDeviceCode(effectiveScopes);
-    if (res && res.accessToken) {
+    if (res && res.accessToken && typeof this.setAzureAuthToken === 'function') {
       this.setAzureAuthToken(res.accessToken);
     }
     return res;
   }
 
-  async ericaiAuthenticateWithCode(
+  async customaiAuthenticateWithCode(
     code,
     redirectUri,
-    scopes = [EricAIBase.defaultScope]
+    scopes = [CustomAIBase.defaultScope]
   ) {
-    const effectiveScopes = scopes && scopes.length ? scopes : [EricAIBase.defaultScope];
+    const effectiveScopes = scopes && scopes.length ? scopes : [CustomAIBase.defaultScope];
     const res = await this.nodeAuth.acquireTokenByCode(code, redirectUri, effectiveScopes);
-    if (res && res.accessToken) {
+    if (res && res.accessToken && typeof this.setAzureAuthToken === 'function') {
       this.setAzureAuthToken(res.accessToken);
     }
     return res;
   }
 
-  async ericaiAuthenticatedUser() {
+  async customaiAuthenticatedUser() {
     const accounts = await this.nodeAuth.getCachedAccounts();
     return accounts?.[0]?.username ?? 'Unknown';
   }
 
-  async ericaiLogout() {
+  async customaiLogout() {
     await this.nodeAuth.signOut();
     if (typeof this.setAzureAuthToken === 'function') {
       this.setAzureAuthToken('');
@@ -201,5 +225,5 @@ class EricAINode extends EricAIBase {
   }
 }
 
-module.exports = EricAINode;
-module.exports.default = EricAINode;
+module.exports = CustomAINode;
+module.exports.default = CustomAINode;

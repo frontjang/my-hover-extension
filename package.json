@@ -14,7 +14,8 @@
     "onStartupFinished",
     "onCommand:myHoverExtension.openSettings",
     "onCommand:myHoverExtension.showLastPromptDetails",
-    "onCommand:myHoverExtension.customAI.openAuthentication"
+    "onCommand:myHoverExtension.customAI.openAuthentication",
+    "onCommand:myHoverExtension.customAI.showLogs"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -34,6 +35,12 @@
         "title": "My Hover Extension: Authenticate CustomAI",
         "category": "My Hover Extension",
         "description": "Opens the system browser so you can sign in with your CustomAI provider."
+      },
+      {
+        "command": "myHoverExtension.customAI.showLogs",
+        "title": "My Hover Extension: Show CustomAI Logs",
+        "category": "My Hover Extension",
+        "description": "Opens the output channel that captures CustomAI diagnostic logs."
       }
     ],
     "configuration": {

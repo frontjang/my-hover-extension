@@ -8,10 +8,27 @@ type Jsonish =
   | Jsonish[]
   | { [key: string]: Jsonish };
 
+type LogLevel = 'log' | 'warn' | 'error';
+
+type CustomAILogSink = (
+  level: LogLevel,
+  message: string,
+  extra?: Record<string, unknown>
+) => void;
+
 const SECRET_KEY_PATTERN = /(token|secret|key|authorization|password)/i;
 
 const debugFlag = getEnvVarBoolean('CUSTOMAI_DEBUG_LOGS');
 const DEBUG_ENABLED = debugFlag === undefined ? true : debugFlag;
+
+const logSinks = new Set<CustomAILogSink>();
+
+export function registerCustomAILogSink(sink: CustomAILogSink): () => void {
+  logSinks.add(sink);
+  return () => {
+    logSinks.delete(sink);
+  };
+}
 
 function shouldRedact(keyPath: string): boolean {
   return SECRET_KEY_PATTERN.test(keyPath);
@@ -64,17 +81,32 @@ export function sanitizeForLogging<T>(payload: T): T {
   return sanitize(payload, '') as T;
 }
 
-function logWith(level: 'log' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void {
+function logWith(level: LogLevel, message: string, extra?: Record<string, unknown>): void {
   if (!DEBUG_ENABLED) {
     return;
   }
 
-  if (extra && Object.keys(extra).length > 0) {
+  const sanitizedExtra = extra && Object.keys(extra).length > 0 ? sanitizeForLogging(extra) : undefined;
+
+  if (sanitizedExtra) {
     // eslint-disable-next-line no-console
-    console[level](`[CustomAI] ${message}`, sanitizeForLogging(extra));
+    console[level](`[CustomAI] ${message}`, sanitizedExtra);
   } else {
     // eslint-disable-next-line no-console
     console[level](`[CustomAI] ${message}`);
+  }
+
+  if (logSinks.size > 0) {
+    for (const sink of logSinks) {
+      try {
+        sink(level, message, sanitizedExtra);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('[CustomAI] Log sink error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 }
 

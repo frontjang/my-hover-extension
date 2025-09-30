@@ -18,7 +18,7 @@ import {
   getCustomAIEnvironmentConfig,
   getCustomAIMissingParts,
 } from './ai/customEnv';
-import { logCustomAIDebug } from './ai/customAiDebug';
+import { logCustomAIDebug, registerCustomAILogSink, redactSecret } from './ai/customAiDebug';
 import {
   ProviderExplanationResult,
   resolveGeminiExplanation,
@@ -260,8 +260,32 @@ async function resolveDefinitionReference(
 }
 
 export function activate(context: vscode.ExtensionContext) {
+  const customAiOutputChannel = vscode.window.createOutputChannel('CustomAI Logs');
+  const disposeSink = registerCustomAILogSink((level, message, extra) => {
+    const timestamp = new Date().toISOString();
+    const header = `${timestamp} [${level.toUpperCase()}] ${message}`;
+    customAiOutputChannel.appendLine(header);
+
+    if (extra && Object.keys(extra).length > 0) {
+      customAiOutputChannel.appendLine(JSON.stringify(extra, null, 2));
+    }
+  });
+
+  context.subscriptions.push(customAiOutputChannel);
+  context.subscriptions.push({ dispose: disposeSink });
+
   const configuration = vscode.workspace.getConfiguration('myHoverExtension');
   const providerConfig = getProviderConfig(configuration);
+
+  const envConfig = getCustomAIEnvironmentConfig();
+  const envMissing = getCustomAIMissingParts(envConfig);
+  logCustomAIDebug('CustomAI environment inspected during activation', {
+    endpoint: envConfig.endpoint,
+    model: envConfig.model,
+    apiKey: redactSecret(envConfig.apiKey),
+    missing: envMissing,
+    isComplete: envMissing.length === 0,
+  });
 
   if (shouldWarnForProvider(providerConfig)) {
     void promptForConfiguration(providerConfig.provider);
@@ -275,6 +299,13 @@ export function activate(context: vscode.ExtensionContext) {
     'myHoverExtension.openSettings',
     async () => {
       await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
+    }
+  );
+
+  const showCustomAILogsCommand = vscode.commands.registerCommand(
+    'myHoverExtension.customAI.showLogs',
+    () => {
+      customAiOutputChannel.show(true);
     }
   );
 
@@ -715,6 +746,7 @@ export function activate(context: vscode.ExtensionContext) {
     hoverProvider,
     defProvider,
     openSettingsCommand,
+    showCustomAILogsCommand,
     showLastPromptCommand,
     openCustomAiAuthCommand
   );

@@ -18,6 +18,8 @@ export interface CustomAIOptions extends ClientOptions {
 
 type CertificateInput = string | Buffer | Array<string | Buffer> | undefined;
 
+type GenericFetch = (input: unknown, init?: unknown) => Promise<unknown>;
+
 interface CertificateLoadResult {
   certificates?: Array<string | Buffer>;
   fileCount: number;
@@ -40,6 +42,228 @@ interface CertificateLoadSummary {
 
 const CERTIFICATE_FILE_EXTENSIONS = new Set([".crt", ".cer", ".pem", ".der", ".p7b", ".pfx"]);
 const DEFAULT_CERTIFICATE_DIRECTORIES = ["EGADCerts", "EGADCerts/certs"];
+
+const fetchWrapperCache = new WeakMap<GenericFetch, GenericFetch>();
+let fetchRequestCounter = 0;
+let fetchDiagnosticsWarningIssued = false;
+
+const getHeaderKeys = (headers: unknown): string[] | undefined => {
+  if (!headers) {
+    return undefined;
+  }
+
+  if (Array.isArray(headers)) {
+    return headers
+      .map((entry) => (Array.isArray(entry) && entry.length > 0 ? String(entry[0]) : undefined))
+      .filter((entry): entry is string => typeof entry === "string");
+  }
+
+  if (typeof headers === "object") {
+    const maybeHeaders = headers as { forEach?: unknown } & Record<string, unknown>;
+
+    if (typeof maybeHeaders.forEach === "function") {
+      const collected: string[] = [];
+      try {
+        maybeHeaders.forEach((_: unknown, key: unknown) => {
+          if (typeof key === "string") {
+            collected.push(key);
+          }
+        });
+      } catch {
+        // Ignore errors from custom header implementations.
+      }
+      return collected;
+    }
+
+    return Object.keys(maybeHeaders);
+  }
+
+  return undefined;
+};
+
+const extractUrlFromRequest = (input: unknown): string | undefined => {
+  if (!input) {
+    return undefined;
+  }
+
+  if (typeof input === "string") {
+    return input;
+  }
+
+  if (input instanceof URL) {
+    return input.toString();
+  }
+
+  if (typeof input === "object") {
+    const maybeRequest = input as { url?: unknown; href?: unknown };
+    const fromUrl = maybeRequest.url;
+    if (typeof fromUrl === "string") {
+      return fromUrl;
+    }
+    if (fromUrl instanceof URL) {
+      return fromUrl.toString();
+    }
+    const href = maybeRequest.href;
+    if (typeof href === "string") {
+      return href;
+    }
+  }
+
+  return undefined;
+};
+
+const extractMethodFromRequest = (input: unknown, init: unknown): string | undefined => {
+  const fromInit =
+    init && typeof init === "object" && typeof (init as { method?: unknown }).method === "string"
+      ? ((init as { method?: unknown }).method as string)
+      : undefined;
+
+  if (fromInit) {
+    return fromInit.toUpperCase();
+  }
+
+  if (input && typeof input === "object" && typeof (input as { method?: unknown }).method === "string") {
+    return ((input as { method?: unknown }).method as string).toUpperCase();
+  }
+
+  return undefined;
+};
+
+const extractFetchDiagnostics = (
+  input: unknown,
+  init: unknown,
+): { url?: string; method?: string; headerKeys?: string[]; hasBody?: boolean } => {
+  const url = extractUrlFromRequest(input);
+  const method = extractMethodFromRequest(input, init);
+  const headers =
+    init && typeof init === "object" ? (init as { headers?: unknown }).headers : undefined;
+  const headerKeys = getHeaderKeys(headers);
+  const hasBody =
+    !!(
+      init &&
+      typeof init === "object" &&
+      "body" in (init as { [key: string]: unknown }) &&
+      (init as { body?: unknown }).body !== undefined
+    );
+
+  return { url, method, headerKeys, hasBody };
+};
+
+const extractErrorDiagnostics = (error: unknown): Record<string, unknown> => {
+  if (!error || typeof error !== "object") {
+    return { errorMessage: String(error) };
+  }
+
+  const diagnostics: Record<string, unknown> = {};
+  const err = error as { [key: string]: unknown };
+
+  if (typeof err.name === "string") {
+    diagnostics.errorName = err.name;
+  }
+
+  if (typeof err.message === "string") {
+    diagnostics.errorMessage = err.message;
+  }
+
+  if (typeof err.stack === "string") {
+    diagnostics.errorStack = err.stack;
+  }
+
+  if (typeof (err as { code?: unknown }).code === "string") {
+    diagnostics.errorCode = (err as { code?: string }).code;
+  }
+
+  if (typeof (err as { errno?: unknown }).errno === "number") {
+    diagnostics.errno = (err as { errno?: number }).errno;
+  }
+
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") {
+    const causeObj = cause as { [key: string]: unknown };
+    if (typeof causeObj.message === "string") {
+      diagnostics.causeMessage = causeObj.message;
+    }
+    if (typeof causeObj.name === "string") {
+      diagnostics.causeName = causeObj.name;
+    }
+    if (typeof (causeObj as { code?: unknown }).code === "string") {
+      diagnostics.causeCode = (causeObj as { code?: string }).code;
+    }
+  }
+
+  const response = (err as { response?: unknown }).response;
+  if (response && typeof response === "object") {
+    const responseObj = response as { [key: string]: unknown };
+    if (typeof responseObj.status === "number") {
+      diagnostics.responseStatus = responseObj.status;
+    }
+    if (typeof responseObj.statusText === "string") {
+      diagnostics.responseStatusText = responseObj.statusText;
+    }
+  }
+
+  return diagnostics;
+};
+
+const createDiagnosticFetch = (baseFetch?: GenericFetch): GenericFetch | undefined => {
+  if (!baseFetch) {
+    return undefined;
+  }
+
+  const existing = fetchWrapperCache.get(baseFetch);
+  if (existing) {
+    return existing;
+  }
+
+  const wrapped: GenericFetch = async (input, init) => {
+    const requestId = ++fetchRequestCounter;
+    const diagnostics = extractFetchDiagnostics(input, init);
+    logCustomAIDebug("Dispatching CustomAI fetch request", {
+      requestId,
+      ...diagnostics,
+    });
+
+    try {
+      const response = await baseFetch(input, init);
+      const responseObj = response as { status?: unknown; statusText?: unknown };
+      const status = typeof responseObj.status === "number" ? responseObj.status : undefined;
+      const statusText =
+        typeof responseObj.statusText === "string" ? responseObj.statusText : undefined;
+
+      logCustomAIDebug("CustomAI fetch completed", {
+        requestId,
+        status,
+        statusText,
+        ...diagnostics,
+      });
+
+      return response;
+    } catch (error) {
+      logCustomAIWarning("CustomAI fetch failed", {
+        requestId,
+        ...diagnostics,
+        ...extractErrorDiagnostics(error),
+      });
+      throw error;
+    }
+  };
+
+  fetchWrapperCache.set(baseFetch, wrapped);
+  logCustomAIDebug("Enabled CustomAI fetch diagnostics for runtime fetch implementation");
+  return wrapped;
+};
+
+const resolveFetchImplementation = (
+  opts: CustomAIOptions,
+  runtimeFetch: unknown,
+): GenericFetch | undefined => {
+  const providedFetch = typeof opts.fetch === "function" ? (opts.fetch as GenericFetch) : undefined;
+  if (providedFetch) {
+    return providedFetch;
+  }
+
+  return typeof runtimeFetch === "function" ? (runtimeFetch as GenericFetch) : undefined;
+};
 
 const createCertificateLoadSummary = (): CertificateLoadSummary => ({
   fileCount: 0,
@@ -367,7 +591,6 @@ export class CustomAI extends OpenAI {
       ? {
           httpAgent: undefined,
           httpsAgent: undefined,
-          fetch: typeof globalRef.fetch === "function" ? (globalRef.fetch as typeof fetch) : undefined,
         }
       : {};
 
@@ -397,6 +620,29 @@ export class CustomAI extends OpenAI {
           providedHttpsAgent: opts.httpsAgent,
         })
       : {};
+
+    const runtimeFetch =
+      typeof globalRef.fetch === "function" ? (globalRef.fetch as GenericFetch) : undefined;
+    const baseFetch = resolveFetchImplementation(opts, runtimeFetch);
+    const diagnosticFetch = createDiagnosticFetch(baseFetch);
+
+    if (!baseFetch && !diagnosticFetch && !fetchDiagnosticsWarningIssued) {
+      logCustomAIWarning(
+        "CustomAI fetch diagnostics unavailable; runtime did not expose a fetch implementation to wrap.",
+      );
+      fetchDiagnosticsWarningIssued = true;
+    }
+
+    const fetchOption = diagnosticFetch
+      ? { fetch: diagnosticFetch }
+      : baseFetch
+        ? { fetch: baseFetch }
+        : {};
+
+    logCustomAIDebug("Resolved CustomAI fetch implementation", {
+      hasBaseFetch: !!baseFetch,
+      diagnosticsWrapped: !!diagnosticFetch,
+    });
 
     logCustomAIDebug("Resolved CustomAI TLS configuration", {
       disableSSLVerification,
@@ -434,6 +680,7 @@ export class CustomAI extends OpenAI {
       ...opts,
       ...browserOptions,
       ...nodeAgentOptions,
+      ...fetchOption,
       apiKey,
       timeout,
       maxRetries,
@@ -486,3 +733,9 @@ export class CustomAI extends OpenAI {
     return headers;
   }
 }
+
+export const __customAITestHooks = {
+  loadCertificatesFromEnvForTest: (): CertificateLoadResult => loadCertificatesFromEnv(),
+  createDiagnosticFetchForTest: (baseFetch?: GenericFetch): GenericFetch | undefined =>
+    createDiagnosticFetch(baseFetch),
+};

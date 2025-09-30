@@ -14,7 +14,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CustomAI = void 0;
+exports.__customAITestHooks = exports.CustomAI = void 0;
 const fs_1 = require("fs");
 const https_1 = require("https");
 const path_1 = require("path");
@@ -24,6 +24,181 @@ const env_1 = require("../config/env");
 const customAiDebug_1 = require("./customAiDebug");
 const CERTIFICATE_FILE_EXTENSIONS = new Set([".crt", ".cer", ".pem", ".der", ".p7b", ".pfx"]);
 const DEFAULT_CERTIFICATE_DIRECTORIES = ["EGADCerts", "EGADCerts/certs"];
+const fetchWrapperCache = new WeakMap();
+let fetchRequestCounter = 0;
+let fetchDiagnosticsWarningIssued = false;
+const getHeaderKeys = (headers) => {
+    if (!headers) {
+        return undefined;
+    }
+    if (Array.isArray(headers)) {
+        return headers
+            .map((entry) => (Array.isArray(entry) && entry.length > 0 ? String(entry[0]) : undefined))
+            .filter((entry) => typeof entry === "string");
+    }
+    if (typeof headers === "object") {
+        const maybeHeaders = headers;
+        if (typeof maybeHeaders.forEach === "function") {
+            const collected = [];
+            try {
+                maybeHeaders.forEach((_, key) => {
+                    if (typeof key === "string") {
+                        collected.push(key);
+                    }
+                });
+            }
+            catch {
+                // Ignore errors from custom header implementations.
+            }
+            return collected;
+        }
+        return Object.keys(maybeHeaders);
+    }
+    return undefined;
+};
+const extractUrlFromRequest = (input) => {
+    if (!input) {
+        return undefined;
+    }
+    if (typeof input === "string") {
+        return input;
+    }
+    if (input instanceof URL) {
+        return input.toString();
+    }
+    if (typeof input === "object") {
+        const maybeRequest = input;
+        const fromUrl = maybeRequest.url;
+        if (typeof fromUrl === "string") {
+            return fromUrl;
+        }
+        if (fromUrl instanceof URL) {
+            return fromUrl.toString();
+        }
+        const href = maybeRequest.href;
+        if (typeof href === "string") {
+            return href;
+        }
+    }
+    return undefined;
+};
+const extractMethodFromRequest = (input, init) => {
+    const fromInit = init && typeof init === "object" && typeof init.method === "string"
+        ? init.method
+        : undefined;
+    if (fromInit) {
+        return fromInit.toUpperCase();
+    }
+    if (input && typeof input === "object" && typeof input.method === "string") {
+        return input.method.toUpperCase();
+    }
+    return undefined;
+};
+const extractFetchDiagnostics = (input, init) => {
+    const url = extractUrlFromRequest(input);
+    const method = extractMethodFromRequest(input, init);
+    const headers = init && typeof init === "object" ? init.headers : undefined;
+    const headerKeys = getHeaderKeys(headers);
+    const hasBody = !!(init &&
+        typeof init === "object" &&
+        "body" in init &&
+        init.body !== undefined);
+    return { url, method, headerKeys, hasBody };
+};
+const extractErrorDiagnostics = (error) => {
+    if (!error || typeof error !== "object") {
+        return { errorMessage: String(error) };
+    }
+    const diagnostics = {};
+    const err = error;
+    if (typeof err.name === "string") {
+        diagnostics.errorName = err.name;
+    }
+    if (typeof err.message === "string") {
+        diagnostics.errorMessage = err.message;
+    }
+    if (typeof err.stack === "string") {
+        diagnostics.errorStack = err.stack;
+    }
+    if (typeof err.code === "string") {
+        diagnostics.errorCode = err.code;
+    }
+    if (typeof err.errno === "number") {
+        diagnostics.errno = err.errno;
+    }
+    const cause = err.cause;
+    if (cause && typeof cause === "object") {
+        const causeObj = cause;
+        if (typeof causeObj.message === "string") {
+            diagnostics.causeMessage = causeObj.message;
+        }
+        if (typeof causeObj.name === "string") {
+            diagnostics.causeName = causeObj.name;
+        }
+        if (typeof causeObj.code === "string") {
+            diagnostics.causeCode = causeObj.code;
+        }
+    }
+    const response = err.response;
+    if (response && typeof response === "object") {
+        const responseObj = response;
+        if (typeof responseObj.status === "number") {
+            diagnostics.responseStatus = responseObj.status;
+        }
+        if (typeof responseObj.statusText === "string") {
+            diagnostics.responseStatusText = responseObj.statusText;
+        }
+    }
+    return diagnostics;
+};
+const createDiagnosticFetch = (baseFetch) => {
+    if (!baseFetch) {
+        return undefined;
+    }
+    const existing = fetchWrapperCache.get(baseFetch);
+    if (existing) {
+        return existing;
+    }
+    const wrapped = async (input, init) => {
+        const requestId = ++fetchRequestCounter;
+        const diagnostics = extractFetchDiagnostics(input, init);
+        (0, customAiDebug_1.logCustomAIDebug)("Dispatching CustomAI fetch request", {
+            requestId,
+            ...diagnostics,
+        });
+        try {
+            const response = await baseFetch(input, init);
+            const responseObj = response;
+            const status = typeof responseObj.status === "number" ? responseObj.status : undefined;
+            const statusText = typeof responseObj.statusText === "string" ? responseObj.statusText : undefined;
+            (0, customAiDebug_1.logCustomAIDebug)("CustomAI fetch completed", {
+                requestId,
+                status,
+                statusText,
+                ...diagnostics,
+            });
+            return response;
+        }
+        catch (error) {
+            (0, customAiDebug_1.logCustomAIWarning)("CustomAI fetch failed", {
+                requestId,
+                ...diagnostics,
+                ...extractErrorDiagnostics(error),
+            });
+            throw error;
+        }
+    };
+    fetchWrapperCache.set(baseFetch, wrapped);
+    (0, customAiDebug_1.logCustomAIDebug)("Enabled CustomAI fetch diagnostics for runtime fetch implementation");
+    return wrapped;
+};
+const resolveFetchImplementation = (opts, runtimeFetch) => {
+    const providedFetch = typeof opts.fetch === "function" ? opts.fetch : undefined;
+    if (providedFetch) {
+        return providedFetch;
+    }
+    return typeof runtimeFetch === "function" ? runtimeFetch : undefined;
+};
 const createCertificateLoadSummary = () => ({
     fileCount: 0,
     directoryCertificateCount: 0,
@@ -279,7 +454,6 @@ class CustomAI extends openai_1.default {
             ? {
                 httpAgent: undefined,
                 httpsAgent: undefined,
-                fetch: typeof globalRef.fetch === "function" ? globalRef.fetch : undefined,
             }
             : {};
         const disableSSLVerificationEnv = (0, env_1.getEnvVarBoolean)("CUSTOMAI_ALLOW_SELF_SIGNED_CERTS");
@@ -301,6 +475,22 @@ class CustomAI extends openai_1.default {
                 providedHttpsAgent: opts.httpsAgent,
             })
             : {};
+        const runtimeFetch = typeof globalRef.fetch === "function" ? globalRef.fetch : undefined;
+        const baseFetch = resolveFetchImplementation(opts, runtimeFetch);
+        const diagnosticFetch = createDiagnosticFetch(baseFetch);
+        if (!baseFetch && !diagnosticFetch && !fetchDiagnosticsWarningIssued) {
+            (0, customAiDebug_1.logCustomAIWarning)("CustomAI fetch diagnostics unavailable; runtime did not expose a fetch implementation to wrap.");
+            fetchDiagnosticsWarningIssued = true;
+        }
+        const fetchOption = diagnosticFetch
+            ? { fetch: diagnosticFetch }
+            : baseFetch
+                ? { fetch: baseFetch }
+                : {};
+        (0, customAiDebug_1.logCustomAIDebug)("Resolved CustomAI fetch implementation", {
+            hasBaseFetch: !!baseFetch,
+            diagnosticsWrapped: !!diagnosticFetch,
+        });
         (0, customAiDebug_1.logCustomAIDebug)("Resolved CustomAI TLS configuration", {
             disableSSLVerification,
             disableAutoCertLoading,
@@ -333,6 +523,7 @@ class CustomAI extends openai_1.default {
             ...opts,
             ...browserOptions,
             ...nodeAgentOptions,
+            ...fetchOption,
             apiKey,
             timeout,
             maxRetries,
@@ -382,4 +573,8 @@ class CustomAI extends openai_1.default {
 }
 exports.CustomAI = CustomAI;
 CustomAI.defaultScope = (0, env_1.requireEnvVar)("CUSTOMAI_DEFAULT_SCOPE");
+exports.__customAITestHooks = {
+    loadCertificatesFromEnvForTest: () => loadCertificatesFromEnv(),
+    createDiagnosticFetchForTest: (baseFetch) => createDiagnosticFetch(baseFetch),
+};
 //# sourceMappingURL=CustomAI.js.map

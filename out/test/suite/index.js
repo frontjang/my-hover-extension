@@ -12,6 +12,7 @@ async function run() {
     const testsRoot = path.resolve(__dirname, '.');
     mocha.addFile(path.join(testsRoot, 'sanity.test.js'));
     mocha.addFile(path.join(testsRoot, 'prompts.test.js'));
+    mocha.addFile(path.join(testsRoot, 'customai.test.js'));
     await new Promise((resolve, reject) => {
         try {
             mocha.run((failures) => {

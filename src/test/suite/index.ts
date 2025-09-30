@@ -11,6 +11,7 @@ export async function run(): Promise<void> {
   const testsRoot = path.resolve(__dirname, '.');
   mocha.addFile(path.join(testsRoot, 'sanity.test.js'));
   mocha.addFile(path.join(testsRoot, 'prompts.test.js'));
+  mocha.addFile(path.join(testsRoot, 'customai.test.js'));
 
   await new Promise<void>((resolve, reject) => {
     try {

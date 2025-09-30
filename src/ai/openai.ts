@@ -1,29 +1,55 @@
-const https = require('https');
-const { PROVIDER_LABELS } = require('./types');
+import * as http from 'http';
+import * as https from 'https';
+import * as vscode from 'vscode';
+import { ChatMessage, ProviderSelection, PROVIDER_LABELS } from './types';
 
-function coerceOpenAIErrorMessage(provider, statusCode, body) {
+type OpenAIChoice = {
+  message?: {
+    content?: string;
+  };
+};
+
+interface OpenAIResponse {
+  choices?: OpenAIChoice[];
+}
+
+export interface OpenAIExplanationResult {
+  text?: string;
+  error?: string;
+}
+
+function coerceOpenAIErrorMessage(
+  provider: ProviderSelection,
+  statusCode: number | undefined,
+  body: string
+): string {
   if (!body) {
     return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}.`;
   }
 
   try {
-    const parsed = JSON.parse(body);
-    const message = parsed?.error?.message?.trim();
+    const parsed = JSON.parse(body) as { error?: { message?: string } };
+    const message = parsed.error?.message?.trim();
 
     if (message) {
       return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}: ${message}`;
     }
-  } catch (error) {
+  } catch (parseError) {
     // Ignore JSON parse errors and fall back to the raw body below.
   }
 
   const sanitized = body.length > 500 ? `${body.slice(0, 497)}...` : body;
-  return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}: ${
-    sanitized.trim() || 'Unknown error.'
-  }`;
+  return `${PROVIDER_LABELS[provider]} request failed with status ${statusCode ?? 'unknown'}: ${sanitized.trim() || 'Unknown error.'}`;
 }
 
-async function fetchOpenAIStyleExplanation(messages, endpoint, apiKey, model, token, provider) {
+export async function fetchOpenAIStyleExplanation(
+  messages: ChatMessage[],
+  endpoint: string,
+  apiKey: string,
+  model: string,
+  token: vscode.CancellationToken,
+  provider: ProviderSelection
+): Promise<OpenAIExplanationResult> {
   if (messages.length === 0) {
     return { error: 'Prompt did not include any messages.' };
   }
@@ -47,8 +73,15 @@ async function fetchOpenAIStyleExplanation(messages, endpoint, apiKey, model, to
 
   const url = new URL(endpoint);
 
-  return new Promise((resolve) => {
-    const req = https.request(
+  return new Promise<OpenAIExplanationResult>((resolve) => {
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      resolve({ error: `${PROVIDER_LABELS[provider]} endpoint must use HTTP or HTTPS.` });
+      return;
+    }
+
+    const transport = url.protocol === 'http:' ? http : https;
+
+    const req = transport.request(
       url,
       {
         method: 'POST',
@@ -59,7 +92,7 @@ async function fetchOpenAIStyleExplanation(messages, endpoint, apiKey, model, to
         }
       },
       (res) => {
-        const chunks = [];
+        const chunks: Buffer[] = [];
 
         res.on('data', (chunk) => {
           chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
@@ -70,15 +103,11 @@ async function fetchOpenAIStyleExplanation(messages, endpoint, apiKey, model, to
 
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             try {
-              const json = JSON.parse(body);
+              const json = JSON.parse(body) as OpenAIResponse;
               const choice = json.choices?.find((c) => !!c.message?.content);
               const text = choice?.message?.content?.trim();
 
-              resolve(
-                text
-                  ? { text }
-                  : { error: `${PROVIDER_LABELS[provider]} returned an empty response.` }
-              );
+              resolve(text ? { text } : { error: `${PROVIDER_LABELS[provider]} returned an empty response.` });
             } catch (error) {
               console.error(
                 `[MyHoverExtension] Failed to parse ${PROVIDER_LABELS[provider]} response:`,
@@ -114,7 +143,3 @@ async function fetchOpenAIStyleExplanation(messages, endpoint, apiKey, model, to
     req.end();
   });
 }
-
-module.exports = {
-  fetchOpenAIStyleExplanation
-};

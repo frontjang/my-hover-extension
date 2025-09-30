@@ -1,21 +1,24 @@
-const { buildPromptPayload } = require('../prompts/builder');
-const { recordPromptSession } = require('../promptSessions');
-const { fetchGeminiExplanation } = require('./gemini');
-const { fetchOpenAIStyleExplanation } = require('./openai');
+import * as vscode from 'vscode';
+import { LineProcessorRegistry } from '../prompts/registry';
+import { buildPromptPayload } from '../prompts/builder';
+import { recordPromptSession } from '../promptSessions';
+import { ChatMessage, ProviderConfig, ProviderSelection } from './types';
+import { fetchGeminiExplanation } from './gemini';
+import { fetchOpenAIStyleExplanation } from './openai';
 
-async function resolveGeminiExplanation(
-  hoveredWord,
-  lineText,
-  providerConfig,
-  registry,
-  token
-) {
-  const promptPayload = await buildPromptPayload(
-    hoveredWord,
-    lineText,
-    providerConfig,
-    registry
-  );
+export interface ProviderExplanationResult {
+  text?: string;
+  error?: string;
+}
+
+export async function resolveGeminiExplanation(
+  hoveredWord: string,
+  lineText: string | undefined,
+  providerConfig: ProviderConfig,
+  registry: LineProcessorRegistry,
+  token: vscode.CancellationToken
+): Promise<ProviderExplanationResult> {
+  const promptPayload = await buildPromptPayload(hoveredWord, lineText, providerConfig, registry);
   const geminiPrompt = promptPayload.systemPrompt
     ? `${promptPayload.systemPrompt}\n\n${promptPayload.userPrompt}`
     : promptPayload.userPrompt;
@@ -54,24 +57,19 @@ async function resolveGeminiExplanation(
   return explanation;
 }
 
-async function resolveOpenAIStyleExplanation(
-  hoveredWord,
-  lineText,
-  providerConfig,
-  registry,
-  endpoint,
-  apiKey,
-  model,
-  provider,
-  token
-) {
-  const promptPayload = await buildPromptPayload(
-    hoveredWord,
-    lineText,
-    providerConfig,
-    registry
-  );
-  const messages = [];
+export async function resolveOpenAIStyleExplanation(
+  hoveredWord: string,
+  lineText: string | undefined,
+  providerConfig: ProviderConfig,
+  registry: LineProcessorRegistry,
+  endpoint: string,
+  apiKey: string,
+  model: string,
+  provider: ProviderSelection,
+  token: vscode.CancellationToken
+): Promise<ProviderExplanationResult> {
+  const promptPayload = await buildPromptPayload(hoveredWord, lineText, providerConfig, registry);
+  const messages: ChatMessage[] = [];
 
   if (promptPayload.systemPrompt) {
     messages.push({ role: 'system', content: promptPayload.systemPrompt });
@@ -109,8 +107,3 @@ async function resolveOpenAIStyleExplanation(
 
   return explanation;
 }
-
-module.exports = {
-  resolveGeminiExplanation,
-  resolveOpenAIStyleExplanation
-};

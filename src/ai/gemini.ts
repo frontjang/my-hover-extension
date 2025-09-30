@@ -1,28 +1,49 @@
-const https = require('https');
+import * as http from 'http';
+import * as https from 'https';
+import * as vscode from 'vscode';
 
-function coerceGeminiErrorMessage(statusCode, body) {
+interface GeminiCandidate {
+  content?: {
+    parts?: { text?: string }[];
+  };
+}
+
+interface GeminiResponse {
+  candidates?: GeminiCandidate[];
+}
+
+export interface GeminiExplanationResult {
+  text?: string;
+  error?: string;
+}
+
+function coerceGeminiErrorMessage(statusCode: number | undefined, body: string): string {
   if (!body) {
     return `Gemini request failed with status ${statusCode ?? 'unknown'}.`;
   }
 
   try {
-    const parsed = JSON.parse(body);
-    const message = parsed?.error?.message?.trim();
+    const parsed = JSON.parse(body) as { error?: { message?: string } };
+    const message = parsed.error?.message?.trim();
 
     if (message) {
       return `Gemini request failed with status ${statusCode ?? 'unknown'}: ${message}`;
     }
-  } catch (error) {
+  } catch (parseError) {
     // Ignore JSON parsing issues and fall back to the raw body below.
   }
 
   const sanitized = body.length > 500 ? `${body.slice(0, 497)}...` : body;
-  return `Gemini request failed with status ${statusCode ?? 'unknown'}: ${
-    sanitized.trim() || 'Unknown error.'
-  }`;
+  return `Gemini request failed with status ${statusCode ?? 'unknown'}: ${sanitized.trim() || 'Unknown error.'}`;
 }
 
-async function fetchGeminiExplanation(prompt, baseEndpoint, model, apiKey, token) {
+export async function fetchGeminiExplanation(
+  prompt: string,
+  baseEndpoint: string,
+  model: string,
+  apiKey: string,
+  token: vscode.CancellationToken
+): Promise<GeminiExplanationResult> {
   if (!prompt.trim()) {
     return { error: 'Prompt text was empty.' };
   }
@@ -50,8 +71,15 @@ async function fetchGeminiExplanation(prompt, baseEndpoint, model, apiKey, token
 
   const url = new URL(`${baseEndpoint.replace(/\/$/, '')}/${model}:generateContent`);
 
-  return new Promise((resolve) => {
-    const req = https.request(
+  return new Promise<GeminiExplanationResult>((resolve) => {
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      resolve({ error: 'Gemini endpoint must use HTTP or HTTPS.' });
+      return;
+    }
+
+    const transport = url.protocol === 'http:' ? http : https;
+
+    const req = transport.request(
       url,
       {
         method: 'POST',
@@ -62,7 +90,7 @@ async function fetchGeminiExplanation(prompt, baseEndpoint, model, apiKey, token
         }
       },
       (res) => {
-        const chunks = [];
+        const chunks: Buffer[] = [];
 
         res.on('data', (chunk) => {
           chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
@@ -73,7 +101,7 @@ async function fetchGeminiExplanation(prompt, baseEndpoint, model, apiKey, token
 
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             try {
-              const json = JSON.parse(body);
+              const json = JSON.parse(body) as GeminiResponse;
               const candidate = json.candidates?.find((c) => c.content?.parts?.length);
               const text = candidate?.content?.parts
                 ?.map((part) => part.text ?? '')
@@ -113,7 +141,3 @@ async function fetchGeminiExplanation(prompt, baseEndpoint, model, apiKey, token
     req.end();
   });
 }
-
-module.exports = {
-  fetchGeminiExplanation
-};

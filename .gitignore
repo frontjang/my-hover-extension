@@ -1,8 +1,4 @@
 node_modules/
 .vscode-test/
-
-# Build output
-out/
-
-# Packaged extensions
 *.vsix
+.env

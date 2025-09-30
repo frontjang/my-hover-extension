@@ -8,7 +8,13 @@
     "inlineSources": true,
     "rootDir": "src",
     "strict": true,
-    "types": ["node", "mocha"]
+    "types": ["node", "mocha"],
+    "baseUrl": "./",
+    "paths": {
+      "openai": ["src/vendor/openai"],
+      "openai/core": ["src/vendor/openai-core"],
+      "@azure/msal-browser": ["src/vendor/msal-browser"]
+    }
   },
   "exclude": ["node_modules", ".vscode-test"]
 }

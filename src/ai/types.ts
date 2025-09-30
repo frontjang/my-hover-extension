@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-export type ProviderSelection = 'gemini' | 'openai' | 'custom';
+export type ProviderSelection = 'gemini' | 'openai' | 'custom' | 'customAI';
 
 export interface ProviderConfig {
   provider: ProviderSelection;
@@ -27,7 +27,8 @@ export type ChatMessage = {
 export const PROVIDER_LABELS: Record<ProviderSelection, string> = {
   gemini: 'Gemini',
   openai: 'OpenAI',
-  custom: 'Custom OpenAI-compatible'
+  custom: 'Custom OpenAI-compatible',
+  customAI: 'CustomAI (.env)'
 };
 
 export function getProviderConfig(

@@ -13,6 +13,7 @@ import {
   PROVIDER_LABELS,
   getProviderConfig
 } from './ai/types';
+import { getCustomAIEnvironmentConfig, getCustomAIMissingParts } from './ai/customEnv';
 import {
   ProviderExplanationResult,
   resolveGeminiExplanation,
@@ -33,10 +34,22 @@ function shouldWarnForProvider(config: ProviderConfig): boolean {
     return !config.customApiKey;
   }
 
+  if (config.provider === 'customAI') {
+    const envConfig = getCustomAIEnvironmentConfig();
+    return getCustomAIMissingParts(envConfig).length > 0;
+  }
+
   return false;
 }
 
-async function promptForConfiguration(): Promise<void> {
+async function promptForConfiguration(provider?: ProviderSelection): Promise<void> {
+  if (provider === 'customAI') {
+    await vscode.window.showInformationMessage(
+      'My Hover Extension requires environment variables for the CustomAI provider. Update your .env file and reload VS Code.'
+    );
+    return;
+  }
+
   const selection = await vscode.window.showInformationMessage(
     'My Hover Extension requires an API key for the selected provider.',
     'Open Settings'
@@ -164,7 +177,7 @@ export function activate(context: vscode.ExtensionContext) {
   const providerConfig = getProviderConfig(configuration);
 
   if (shouldWarnForProvider(providerConfig)) {
-    void promptForConfiguration();
+    void promptForConfiguration(providerConfig.provider);
   }
 
   if (!configuration.get<boolean>('enable')) {
@@ -443,6 +456,59 @@ export function activate(context: vscode.ExtensionContext) {
                 );
                 providerExplanation = {
                   error: formatMissingConfigurationMessage(providerLabel, missing)
+                };
+              }
+            } else if (refreshedConfig.provider === 'customAI') {
+              const envConfig = getCustomAIEnvironmentConfig();
+              const missing = getCustomAIMissingParts(envConfig);
+
+              if (missing.length === 0) {
+                console.log('[MyHoverExtension] Requesting CustomAI explanation...');
+                const statusDisposable = vscode.window.setStatusBarMessage(
+                  'My Hover Extension: Loading explanation…'
+                );
+                try {
+                  providerExplanation = await resolveOpenAIStyleExplanation(
+                    hoveredWord,
+                    lineText,
+                    refreshedConfig,
+                    registry,
+                    envConfig.endpoint,
+                    envConfig.apiKey,
+                    envConfig.model,
+                    'customAI',
+                    token
+                  );
+                } finally {
+                  statusDisposable.dispose();
+                }
+
+                const logStatus = providerExplanation?.text ? 'received' : 'not available';
+                console.log(`[MyHoverExtension] CustomAI explanation ${logStatus}.`);
+
+                if (providerExplanation?.error) {
+                  console.log(
+                    `[MyHoverExtension] CustomAI explanation error: ${providerExplanation.error}`
+                  );
+                }
+              } else {
+                console.log(
+                  '[MyHoverExtension] CustomAI environment configuration incomplete, skipping request.'
+                );
+                const envMessage = (() => {
+                  if (missing.length === 0) {
+                    return `${providerLabel} configuration is incomplete. Update the required environment variables.`;
+                  }
+
+                  const formattedParts =
+                    missing.length === 1
+                      ? missing[0]
+                      : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`;
+
+                  return `${providerLabel} configuration is missing the ${formattedParts}. Update the corresponding environment variables (see .env).`;
+                })();
+                providerExplanation = {
+                  error: envMessage
                 };
               }
             }

@@ -1,4 +1,10 @@
 node_modules/
 .vscode-test/
+
+# Build output
+
+# Packaged extensions
 *.vsix
-out/
+
+# Environment configuration
+.env

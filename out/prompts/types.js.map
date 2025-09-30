@@ -1,0 +1,1 @@
+{"version":3,"file":"types.js","sourceRoot":"","sources":["../../src/prompts/types.ts"],"names":[],"mappings":"","sourcesContent":["export interface LineProcessorParams {\n  lineText: string;\n  word: string;\n}\n\nexport interface LineProcessor {\n  readonly id: string;\n  process(params: LineProcessorParams): Promise<string | undefined>;\n}\n"]}

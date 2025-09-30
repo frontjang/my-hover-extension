@@ -1,0 +1,1 @@
+{"version":3,"file":"openai-core.js","sourceRoot":"","sources":["../../src/vendor/openai-core.ts"],"names":[],"mappings":"","sourcesContent":["export interface FinalRequestOptions {\n  headers?: Record<string, string>;\n}\n"]}

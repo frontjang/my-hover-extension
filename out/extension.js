@@ -1,0 +1,363 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.activate = activate;
+exports.deactivate = deactivate;
+const path = require("path");
+const vscode = require("vscode");
+const prompts_1 = require("./prompts");
+const types_1 = require("./ai/types");
+const explanations_1 = require("./ai/explanations");
+const promptSessions_1 = require("./promptSessions");
+function shouldWarnForProvider(config) {
+    if (config.provider === 'gemini') {
+        return !config.geminiApiKey;
+    }
+    if (config.provider === 'openai') {
+        return !config.openAiApiKey;
+    }
+    if (config.provider === 'custom') {
+        return !config.customApiKey;
+    }
+    return false;
+}
+async function promptForConfiguration() {
+    const selection = await vscode.window.showInformationMessage('My Hover Extension requires an API key for the selected provider.', 'Open Settings');
+    if (selection === 'Open Settings') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
+    }
+}
+function createCommandLinksMarkdown() {
+    const links = [
+        '[⚙️ Configure extension](command:myHoverExtension.openSettings)',
+        '[📝 View last prompt](command:myHoverExtension.showLastPromptDetails)'
+    ];
+    return links.join(' • ');
+}
+function formatMissingConfigurationMessage(providerLabel, missingParts) {
+    if (missingParts.length === 0) {
+        return `${providerLabel} configuration is incomplete. Use the settings button below to update the extension.`;
+    }
+    const formattedParts = missingParts.length === 1
+        ? missingParts[0]
+        : `${missingParts.slice(0, -1).join(', ')} and ${missingParts[missingParts.length - 1]}`;
+    return `${providerLabel} configuration is missing the ${formattedParts}. Use the settings button below to update the extension.`;
+}
+function resolveReferenceRoots(config) {
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    const roots = new Set();
+    const addRoot = (candidate) => {
+        if (!candidate) {
+            return;
+        }
+        const normalized = path.resolve(candidate);
+        if (!roots.has(normalized)) {
+            roots.add(normalized);
+        }
+    };
+    for (const folder of workspaceFolders) {
+        addRoot(folder.uri.fsPath);
+    }
+    for (const root of config.referenceSearchRoots) {
+        if (path.isAbsolute(root)) {
+            addRoot(root);
+        }
+        else {
+            for (const folder of workspaceFolders) {
+                addRoot(path.join(folder.uri.fsPath, root));
+            }
+        }
+    }
+    return Array.from(roots);
+}
+function createPromptDependencies(config) {
+    const roots = resolveReferenceRoots(config);
+    console.log(`[MyHoverExtension] Using reference search roots: ${roots.length > 0 ? roots.join(', ') : '<none>'}`);
+    const resolver = new prompts_1.FileContextResolver({ roots });
+    const registry = (0, prompts_1.createDefaultLineProcessorRegistry)(resolver);
+    return { resolver, registry };
+}
+async function resolveDefinitionReference(lineText, resolver) {
+    const match = prompts_1.FILE_LINE_PATTERN.exec(lineText);
+    if (!match) {
+        console.log('[MyHoverExtension] No file_line reference detected on the current line.');
+        return undefined;
+    }
+    const parsed = (0, prompts_1.parseFileLineReference)(match[1]);
+    if (!parsed) {
+        console.log('[MyHoverExtension] file_line reference found but could not be parsed.');
+        return undefined;
+    }
+    console.log(`[MyHoverExtension] Resolving definition reference ${parsed.filePath}:${parsed.line}.`);
+    const context = await resolver.resolve(parsed.filePath, parsed.line);
+    if (!context) {
+        console.log('[MyHoverExtension] Definition reference could not be resolved to a file.');
+        return undefined;
+    }
+    const uri = vscode.Uri.file(context.absolutePath);
+    const position = new vscode.Position(Math.max(0, parsed.line - 1), 0);
+    return new vscode.Location(uri, position);
+}
+function activate(context) {
+    const configuration = vscode.workspace.getConfiguration('myHoverExtension');
+    const providerConfig = (0, types_1.getProviderConfig)(configuration);
+    if (shouldWarnForProvider(providerConfig)) {
+        void promptForConfiguration();
+    }
+    if (!configuration.get('enable')) {
+        return;
+    }
+    const openSettingsCommand = vscode.commands.registerCommand('myHoverExtension.openSettings', async () => {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
+    });
+    const showLastPromptCommand = vscode.commands.registerCommand('myHoverExtension.showLastPromptDetails', async () => {
+        const session = (0, promptSessions_1.getLastPromptSession)();
+        if (!session) {
+            void vscode.window.showInformationMessage('No prompt history available yet. Hover over code to generate an explanation first.');
+            return;
+        }
+        const providerLabel = types_1.PROVIDER_LABELS[session.provider];
+        const timestamp = new Date(session.timestamp).toLocaleString();
+        const lines = [
+            '# My Hover Extension prompt details',
+            '',
+            `- **Provider:** ${providerLabel}`,
+            `- **Endpoint:** ${session.endpoint || 'Not configured'}`,
+            `- **Model:** ${session.model || 'Not configured'}`,
+            `- **Hovered word:** ${session.hoveredWord}`,
+            `- **Timestamp:** ${timestamp}`,
+            ''
+        ];
+        if (session.lineText) {
+            lines.push('## Source line', '```', session.lineText, '```', '');
+        }
+        lines.push('## System prompt');
+        if (session.systemPrompt) {
+            lines.push('```', session.systemPrompt, '```');
+        }
+        else {
+            lines.push('_Not sent_');
+        }
+        lines.push('', '## User prompt', '```', session.userPrompt, '```', '');
+        lines.push('## Rendered request payload', '```json', session.requestPayload, '```', '');
+        lines.push('## Provider response');
+        if (session.responseText) {
+            lines.push('```', session.responseText, '```');
+        }
+        if (session.responseError) {
+            if (session.responseText) {
+                lines.push('');
+            }
+            lines.push('### Error details', '```', session.responseError, '```');
+        }
+        if (!session.responseText && !session.responseError) {
+            lines.push('_No response received._');
+        }
+        const document = await vscode.workspace.openTextDocument({
+            content: lines.join('\n'),
+            language: 'markdown'
+        });
+        await vscode.window.showTextDocument(document, { preview: true });
+    });
+    let resolvingBuiltInHover = false;
+    let resolvingBuiltInDefinition = false;
+    const hoverProvider = vscode.languages.registerHoverProvider({ scheme: 'file', language: '*' }, {
+        async provideHover(document, position, token) {
+            console.log(`[MyHoverExtension] Hover requested for ${document.uri.toString()} at ${position.line + 1}:${position.character + 1}`);
+            if (resolvingBuiltInHover) {
+                console.log('[MyHoverExtension] Skipping hover to avoid re-entrancy.');
+                return undefined;
+            }
+            resolvingBuiltInHover = true;
+            let builtInHovers;
+            try {
+                console.log('[MyHoverExtension] Resolving built-in hover results...');
+                builtInHovers = await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, position);
+                console.log(`[MyHoverExtension] Built-in hover count: ${builtInHovers?.length ?? 0}`);
+            }
+            finally {
+                resolvingBuiltInHover = false;
+            }
+            const wordRange = document.getWordRangeAtPosition(position);
+            const hoveredWord = wordRange ? document.getText(wordRange) : undefined;
+            const lineText = document.lineAt(position.line).text;
+            let providerExplanation;
+            const refreshedConfig = (0, types_1.getProviderConfig)(vscode.workspace.getConfiguration('myHoverExtension'));
+            const providerLabel = types_1.PROVIDER_LABELS[refreshedConfig.provider];
+            const { registry } = createPromptDependencies(refreshedConfig);
+            if (hoveredWord && !token.isCancellationRequested) {
+                try {
+                    if (refreshedConfig.provider === 'gemini') {
+                        const missing = [];
+                        if (!refreshedConfig.geminiEndpoint) {
+                            missing.push('endpoint');
+                        }
+                        if (!refreshedConfig.geminiApiKey) {
+                            missing.push('API key');
+                        }
+                        if (!refreshedConfig.geminiModel) {
+                            missing.push('model');
+                        }
+                        if (missing.length === 0) {
+                            console.log('[MyHoverExtension] Requesting Gemini explanation...');
+                            const statusDisposable = vscode.window.setStatusBarMessage('My Hover Extension: Loading explanation…');
+                            try {
+                                providerExplanation = await (0, explanations_1.resolveGeminiExplanation)(hoveredWord, lineText, refreshedConfig, registry, token);
+                            }
+                            finally {
+                                statusDisposable.dispose();
+                            }
+                            const logStatus = providerExplanation?.text ? 'received' : 'not available';
+                            console.log(`[MyHoverExtension] Gemini explanation ${logStatus}.`);
+                            if (providerExplanation?.error) {
+                                console.log(`[MyHoverExtension] Gemini explanation error: ${providerExplanation.error}`);
+                            }
+                        }
+                        else {
+                            console.log('[MyHoverExtension] Gemini configuration incomplete, skipping request.');
+                            providerExplanation = {
+                                error: formatMissingConfigurationMessage(providerLabel, missing)
+                            };
+                        }
+                    }
+                    else if (refreshedConfig.provider === 'openai') {
+                        const missing = [];
+                        if (!refreshedConfig.openAiEndpoint) {
+                            missing.push('endpoint');
+                        }
+                        if (!refreshedConfig.openAiApiKey) {
+                            missing.push('API key');
+                        }
+                        if (!refreshedConfig.openAiModel) {
+                            missing.push('model');
+                        }
+                        if (missing.length === 0) {
+                            console.log('[MyHoverExtension] Requesting OpenAI explanation...');
+                            const statusDisposable = vscode.window.setStatusBarMessage('My Hover Extension: Loading explanation…');
+                            try {
+                                providerExplanation = await (0, explanations_1.resolveOpenAIStyleExplanation)(hoveredWord, lineText, refreshedConfig, registry, refreshedConfig.openAiEndpoint, refreshedConfig.openAiApiKey, refreshedConfig.openAiModel, 'openai', token);
+                            }
+                            finally {
+                                statusDisposable.dispose();
+                            }
+                            const logStatus = providerExplanation?.text ? 'received' : 'not available';
+                            console.log(`[MyHoverExtension] OpenAI explanation ${logStatus}.`);
+                            if (providerExplanation?.error) {
+                                console.log(`[MyHoverExtension] OpenAI explanation error: ${providerExplanation.error}`);
+                            }
+                        }
+                        else {
+                            console.log('[MyHoverExtension] OpenAI configuration incomplete, skipping request.');
+                            providerExplanation = {
+                                error: formatMissingConfigurationMessage(providerLabel, missing)
+                            };
+                        }
+                    }
+                    else if (refreshedConfig.provider === 'custom') {
+                        const missing = [];
+                        const chosenModel = refreshedConfig.customModel || refreshedConfig.openAiModel;
+                        if (!refreshedConfig.customEndpoint) {
+                            missing.push('endpoint');
+                        }
+                        if (!refreshedConfig.customApiKey) {
+                            missing.push('API key');
+                        }
+                        if (!chosenModel) {
+                            missing.push('model');
+                        }
+                        if (missing.length === 0) {
+                            console.log('[MyHoverExtension] Requesting custom explanation...');
+                            const statusDisposable = vscode.window.setStatusBarMessage('My Hover Extension: Loading explanation…');
+                            try {
+                                providerExplanation = await (0, explanations_1.resolveOpenAIStyleExplanation)(hoveredWord, lineText, refreshedConfig, registry, refreshedConfig.customEndpoint, refreshedConfig.customApiKey, chosenModel, 'custom', token);
+                            }
+                            finally {
+                                statusDisposable.dispose();
+                            }
+                            const logStatus = providerExplanation?.text ? 'received' : 'not available';
+                            console.log(`[MyHoverExtension] Custom explanation ${logStatus}.`);
+                            if (providerExplanation?.error) {
+                                console.log(`[MyHoverExtension] Custom explanation error: ${providerExplanation.error}`);
+                            }
+                        }
+                        else {
+                            console.log('[MyHoverExtension] Custom provider configuration incomplete, skipping request.');
+                            providerExplanation = {
+                                error: formatMissingConfigurationMessage(providerLabel, missing)
+                            };
+                        }
+                    }
+                }
+                catch (error) {
+                    console.error('[MyHoverExtension] Provider request failed:', error);
+                    const message = error instanceof Error ? error.message : String(error);
+                    providerExplanation = {
+                        error: `Unexpected error while requesting ${providerLabel} explanation: ${message}`
+                    };
+                }
+            }
+            const commandLinks = createCommandLinksMarkdown();
+            const extensionContents = [];
+            if (providerExplanation?.text) {
+                extensionContents.push(new vscode.MarkdownString(providerExplanation.text));
+            }
+            else if (providerExplanation?.error) {
+                extensionContents.push(new vscode.MarkdownString(`_${providerExplanation.error}_`));
+            }
+            const actionsMarkdown = new vscode.MarkdownString(commandLinks);
+            actionsMarkdown.isTrusted = true;
+            const noBuiltInHover = !builtInHovers || builtInHovers.length === 0;
+            const shouldShowActions = Boolean(providerExplanation) || noBuiltInHover || Boolean(hoveredWord);
+            if (shouldShowActions) {
+                extensionContents.push(actionsMarkdown);
+            }
+            if (!noBuiltInHover && builtInHovers) {
+                const hover = new vscode.Hover([...builtInHovers[0].contents]);
+                for (const content of extensionContents) {
+                    hover.contents.push(content);
+                }
+                return hover;
+            }
+            console.log('[MyHoverExtension] No built-in hover found, using extension response.');
+            if (!providerExplanation?.text && !providerExplanation?.error) {
+                extensionContents.unshift(new vscode.MarkdownString('_My Hover Extension did not return a response._'));
+            }
+            return new vscode.Hover(extensionContents);
+        }
+    });
+    const defProvider = vscode.languages.registerDefinitionProvider({ scheme: 'file', language: '*' }, {
+        async provideDefinition(document, position) {
+            if (resolvingBuiltInDefinition) {
+                return undefined;
+            }
+            resolvingBuiltInDefinition = true;
+            let builtInDefs;
+            try {
+                console.log('[MyHoverExtension] Resolving built-in definitions...');
+                builtInDefs = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', document.uri, position);
+                console.log(`[MyHoverExtension] Built-in definition count: ${builtInDefs?.length ?? 0}`);
+            }
+            finally {
+                resolvingBuiltInDefinition = false;
+            }
+            const results = [];
+            if (builtInDefs && builtInDefs.length > 0) {
+                results.push(...builtInDefs);
+            }
+            const refreshedConfig = (0, types_1.getProviderConfig)(vscode.workspace.getConfiguration('myHoverExtension'));
+            const { resolver } = createPromptDependencies(refreshedConfig);
+            const lineText = document.lineAt(position.line).text;
+            const referenceLocation = await resolveDefinitionReference(lineText, resolver);
+            if (referenceLocation) {
+                console.log('[MyHoverExtension] Adding reference-based definition result.');
+                results.push(referenceLocation);
+            }
+            else {
+                console.log('[MyHoverExtension] No reference-based definition result available.');
+            }
+            return results;
+        }
+    });
+    context.subscriptions.push(hoverProvider, defProvider, openSettingsCommand, showLastPromptCommand);
+}
+function deactivate() { }
+//# sourceMappingURL=extension.js.map

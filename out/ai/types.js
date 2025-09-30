@@ -5,7 +5,8 @@ exports.getProviderConfig = getProviderConfig;
 exports.PROVIDER_LABELS = {
     gemini: 'Gemini',
     openai: 'OpenAI',
-    custom: 'Custom OpenAI-compatible'
+    custom: 'Custom OpenAI-compatible',
+    customAI: 'CustomAI (.env)'
 };
 function getProviderConfig(config) {
     const provider = (config.get('provider') ?? 'gemini');

@@ -6,6 +6,8 @@ const path = require("path");
 const vscode = require("vscode");
 const prompts_1 = require("./prompts");
 const types_1 = require("./ai/types");
+const customEnv_1 = require("./ai/customEnv");
+const customAiDebug_1 = require("./ai/customAiDebug");
 const explanations_1 = require("./ai/explanations");
 const promptSessions_1 = require("./promptSessions");
 function shouldWarnForProvider(config) {
@@ -18,11 +20,83 @@ function shouldWarnForProvider(config) {
     if (config.provider === 'custom') {
         return !config.customApiKey;
     }
+    if (config.provider === 'customAI') {
+        const envConfig = (0, customEnv_1.getCustomAIEnvironmentConfig)();
+        return (0, customEnv_1.getCustomAIMissingParts)(envConfig).length > 0;
+    }
     return false;
 }
-async function promptForConfiguration() {
+async function promptForConfiguration(provider) {
+    if (provider === 'customAI') {
+        await promptForCustomAIConfiguration();
+        return;
+    }
     const selection = await vscode.window.showInformationMessage('My Hover Extension requires an API key for the selected provider.', 'Open Settings');
     if (selection === 'Open Settings') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
+    }
+}
+async function openCustomAIAuthorizationInBrowser(showSuccessMessage = true) {
+    const details = (0, customEnv_1.buildCustomAIAuthorizationUrl)();
+    if (!details.url) {
+        const missingText = details.missing.length > 0
+            ? `Missing values: ${details.missing.join(', ')}.`
+            : 'The authorization URL could not be constructed.';
+        (0, customAiDebug_1.logCustomAIDebug)('Unable to open CustomAI authorization URL from VS Code', {
+            missing: details.missing,
+        });
+        await vscode.window.showErrorMessage(`CustomAI authentication could not be started. ${missingText}`);
+        return false;
+    }
+    try {
+        const uri = vscode.Uri.parse(details.url);
+        await vscode.env.openExternal(uri);
+        (0, customAiDebug_1.logCustomAIDebug)('Opened system browser for CustomAI authentication', {
+            scheme: uri.scheme,
+            authority: uri.authority,
+            path: uri.path,
+        });
+        if (showSuccessMessage) {
+            void vscode.window.showInformationMessage('A browser window was opened for CustomAI authentication. Complete the sign-in flow and return to VS Code.');
+        }
+        return true;
+    }
+    catch (error) {
+        (0, customAiDebug_1.logCustomAIDebug)('Failed to open CustomAI authorization URL', {
+            error: error instanceof Error ? error.message : String(error),
+        });
+        await vscode.window.showErrorMessage('CustomAI authentication could not be opened in your browser. See logs for details.');
+        return false;
+    }
+}
+async function promptForCustomAIConfiguration() {
+    const details = (0, customEnv_1.buildCustomAIAuthorizationUrl)();
+    const missingText = details.missing.length > 0
+        ? `Missing values: ${details.missing.join(', ')}.`
+        : undefined;
+    const actions = [];
+    if (details.url) {
+        actions.push('Open Browser');
+    }
+    actions.push('Open Settings');
+    const messageParts = [
+        'My Hover Extension requires environment variables for the CustomAI provider. Update your .env file and reload VS Code.',
+    ];
+    if (details.url) {
+        messageParts.push('If authentication is required, open the browser to sign in.');
+    }
+    if (missingText) {
+        messageParts.push(missingText);
+    }
+    (0, customAiDebug_1.logCustomAIDebug)('Prompting user to configure CustomAI provider', {
+        hasAuthorizationUrl: !!details.url,
+        missing: details.missing,
+    });
+    const selection = await vscode.window.showInformationMessage(messageParts.join(' '), ...actions);
+    if (selection === 'Open Browser') {
+        await openCustomAIAuthorizationInBrowser(false);
+    }
+    else if (selection === 'Open Settings') {
         await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
     }
 }
@@ -98,16 +172,39 @@ async function resolveDefinitionReference(lineText, resolver) {
     return new vscode.Location(uri, position);
 }
 function activate(context) {
+    const customAiOutputChannel = vscode.window.createOutputChannel('CustomAI Logs');
+    const disposeSink = (0, customAiDebug_1.registerCustomAILogSink)((level, message, extra) => {
+        const timestamp = new Date().toISOString();
+        const header = `${timestamp} [${level.toUpperCase()}] ${message}`;
+        customAiOutputChannel.appendLine(header);
+        if (extra && Object.keys(extra).length > 0) {
+            customAiOutputChannel.appendLine(JSON.stringify(extra, null, 2));
+        }
+    });
+    context.subscriptions.push(customAiOutputChannel);
+    context.subscriptions.push({ dispose: disposeSink });
     const configuration = vscode.workspace.getConfiguration('myHoverExtension');
     const providerConfig = (0, types_1.getProviderConfig)(configuration);
+    const envConfig = (0, customEnv_1.getCustomAIEnvironmentConfig)();
+    const envMissing = (0, customEnv_1.getCustomAIMissingParts)(envConfig);
+    (0, customAiDebug_1.logCustomAIDebug)('CustomAI environment inspected during activation', {
+        endpoint: envConfig.endpoint,
+        model: envConfig.model,
+        apiKey: (0, customAiDebug_1.redactSecret)(envConfig.apiKey),
+        missing: envMissing,
+        isComplete: envMissing.length === 0,
+    });
     if (shouldWarnForProvider(providerConfig)) {
-        void promptForConfiguration();
+        void promptForConfiguration(providerConfig.provider);
     }
     if (!configuration.get('enable')) {
         return;
     }
     const openSettingsCommand = vscode.commands.registerCommand('myHoverExtension.openSettings', async () => {
         await vscode.commands.executeCommand('workbench.action.openSettings', 'myHoverExtension');
+    });
+    const showCustomAILogsCommand = vscode.commands.registerCommand('myHoverExtension.customAI.showLogs', () => {
+        customAiOutputChannel.show(true);
     });
     const showLastPromptCommand = vscode.commands.registerCommand('myHoverExtension.showLastPromptDetails', async () => {
         const session = (0, promptSessions_1.getLastPromptSession)();
@@ -157,6 +254,9 @@ function activate(context) {
             language: 'markdown'
         });
         await vscode.window.showTextDocument(document, { preview: true });
+    });
+    const openCustomAiAuthCommand = vscode.commands.registerCommand('myHoverExtension.customAI.openAuthentication', async () => {
+        await openCustomAIAuthorizationInBrowser();
     });
     let resolvingBuiltInHover = false;
     let resolvingBuiltInDefinition = false;
@@ -286,6 +386,40 @@ function activate(context) {
                             };
                         }
                     }
+                    else if (refreshedConfig.provider === 'customAI') {
+                        const envConfig = (0, customEnv_1.getCustomAIEnvironmentConfig)();
+                        const missing = (0, customEnv_1.getCustomAIMissingParts)(envConfig);
+                        if (missing.length === 0) {
+                            console.log('[MyHoverExtension] Requesting CustomAI explanation...');
+                            const statusDisposable = vscode.window.setStatusBarMessage('My Hover Extension: Loading explanation…');
+                            try {
+                                providerExplanation = await (0, explanations_1.resolveOpenAIStyleExplanation)(hoveredWord, lineText, refreshedConfig, registry, envConfig.endpoint, envConfig.apiKey, envConfig.model, 'customAI', token);
+                            }
+                            finally {
+                                statusDisposable.dispose();
+                            }
+                            const logStatus = providerExplanation?.text ? 'received' : 'not available';
+                            console.log(`[MyHoverExtension] CustomAI explanation ${logStatus}.`);
+                            if (providerExplanation?.error) {
+                                console.log(`[MyHoverExtension] CustomAI explanation error: ${providerExplanation.error}`);
+                            }
+                        }
+                        else {
+                            console.log('[MyHoverExtension] CustomAI environment configuration incomplete, skipping request.');
+                            const envMessage = (() => {
+                                if (missing.length === 0) {
+                                    return `${providerLabel} configuration is incomplete. Update the required environment variables.`;
+                                }
+                                const formattedParts = missing.length === 1
+                                    ? missing[0]
+                                    : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`;
+                                return `${providerLabel} configuration is missing the ${formattedParts}. Update the corresponding environment variables (see .env).`;
+                            })();
+                            providerExplanation = {
+                                error: envMessage
+                            };
+                        }
+                    }
                 }
                 catch (error) {
                     console.error('[MyHoverExtension] Provider request failed:', error);
@@ -357,7 +491,7 @@ function activate(context) {
             return results;
         }
     });
-    context.subscriptions.push(hoverProvider, defProvider, openSettingsCommand, showLastPromptCommand);
+    context.subscriptions.push(hoverProvider, defProvider, openSettingsCommand, showCustomAILogsCommand, showLastPromptCommand, openCustomAiAuthCommand);
 }
 function deactivate() { }
 //# sourceMappingURL=extension.js.map

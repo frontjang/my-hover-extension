@@ -68,6 +68,42 @@ const loadCertificatesFromEnv = () => {
         hadInlineCertificates,
     };
 };
+const configureUndiciDispatcher = (opts, context) => {
+    if (context.alreadyConfigured) {
+        return true;
+    }
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-assignment
+        const undici = require("undici");
+        if (typeof undici?.setGlobalDispatcher !== "function" || typeof undici?.Agent !== "function") {
+            (0, customAiDebug_1.logCustomAIWarning)("Undici dispatcher hooks unavailable for CustomAI TLS overrides");
+            return false;
+        }
+        const connectOptions = {
+            rejectUnauthorized: !opts.disableSSLVerification,
+        };
+        if (opts.caCertificates?.length) {
+            connectOptions.ca = opts.caCertificates;
+        }
+        const agentOptions = {
+            connect: connectOptions,
+        };
+        const dispatcher = new undici.Agent(agentOptions);
+        undici.setGlobalDispatcher(dispatcher);
+        (0, customAiDebug_1.logCustomAIDebug)("Configured undici TLS dispatcher for CustomAI", {
+            rejectUnauthorized: connectOptions.rejectUnauthorized,
+            hasCustomCA: !!connectOptions.ca,
+        });
+        return true;
+    }
+    catch (error) {
+        (0, customAiDebug_1.logCustomAIWarning)("Failed to configure undici TLS dispatcher for CustomAI", {
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+    }
+};
+let undiciDispatcherConfigured = false;
 const resolveNodeAgentOptions = (opts) => {
     if (opts.providedHttpsAgent) {
         (0, customAiDebug_1.logCustomAIDebug)("Using caller-provided HTTPS agent for CustomAI");
@@ -80,11 +116,20 @@ const resolveNodeAgentOptions = (opts) => {
         agentOptions.ca = opts.caCertificates;
     }
     const httpsAgent = new https_1.Agent(agentOptions);
+    const dispatcherResult = configureUndiciDispatcher({
+        disableSSLVerification: opts.disableSSLVerification,
+        caCertificates: opts.caCertificates,
+    }, { alreadyConfigured: undiciDispatcherConfigured });
+    if (dispatcherResult) {
+        undiciDispatcherConfigured = true;
+    }
     (0, customAiDebug_1.logCustomAIDebug)("Constructed CustomAI HTTPS agent", {
         rejectUnauthorized: agentOptions.rejectUnauthorized,
         hasCustomCA: !!agentOptions.ca,
+        undiciDispatcherConfigured: dispatcherResult,
     });
     return {
+        httpAgent: httpsAgent,
         httpsAgent,
     };
 };

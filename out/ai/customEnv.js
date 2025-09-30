@@ -29,6 +29,11 @@ function getCustomAIEnvironmentConfig() {
     };
     const completionsValues = COMPLETIONS_KEYS.map((key) => captureValue(key, trim((0, env_1.getEnvVar)(key))));
     const baseUrl = captureValue('CUSTOMAI_BASE_URL', trim((0, env_1.getEnvVar)('CUSTOMAI_BASE_URL')));
+    captureValue('CUSTOMAI_ALLOW_SELF_SIGNED_CERTS', trim((0, env_1.getEnvVar)('CUSTOMAI_ALLOW_SELF_SIGNED_CERTS')));
+    captureValue('CUSTOMAI_DISABLE_AUTO_CERT_LOADING', trim((0, env_1.getEnvVar)('CUSTOMAI_DISABLE_AUTO_CERT_LOADING')));
+    captureValue('CUSTOMAI_CA_BUNDLE_PATH', trim((0, env_1.getEnvVar)('CUSTOMAI_CA_BUNDLE_PATH')));
+    const inlineCaBundle = (0, env_1.getEnvVar)('CUSTOMAI_CA_BUNDLE');
+    captureValue('CUSTOMAI_CA_BUNDLE', inlineCaBundle ? `<inline bundle len=${inlineCaBundle.length}>` : '');
     const explicitEndpoint = completionsValues.find(Boolean);
     const endpoint = explicitEndpoint || buildEndpointFromBase(baseUrl);
     const apiKey = captureValue('CUSTOMAI_API_KEY', trim((0, env_1.getEnvVar)('CUSTOMAI_API_KEY')), true);

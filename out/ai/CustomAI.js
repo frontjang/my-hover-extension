@@ -15,10 +15,79 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CustomAI = void 0;
+const fs_1 = require("fs");
+const https_1 = require("https");
+const path_1 = require("path");
 const openai_1 = require("openai");
 const model_1 = require("../model");
 const env_1 = require("../config/env");
 const customAiDebug_1 = require("./customAiDebug");
+const normalizeCertificateInput = (value) => {
+    if (!value) {
+        return undefined;
+    }
+    return Array.isArray(value) ? value : [value];
+};
+const loadCertificatesFromEnv = () => {
+    const certificates = [];
+    const inlineCertificates = (0, env_1.getEnvVar)("CUSTOMAI_CA_BUNDLE");
+    let hadInlineCertificates = false;
+    if (inlineCertificates) {
+        certificates.push(inlineCertificates);
+        hadInlineCertificates = true;
+    }
+    const bundlePathRaw = (0, env_1.getEnvVar)("CUSTOMAI_CA_BUNDLE_PATH");
+    let fileCount = 0;
+    if (bundlePathRaw) {
+        const segments = bundlePathRaw
+            .split(path_1.delimiter)
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0);
+        for (const segment of segments) {
+            const resolvedPath = (0, path_1.resolve)(segment);
+            if (!(0, fs_1.existsSync)(resolvedPath)) {
+                (0, customAiDebug_1.logCustomAIWarning)("CustomAI CA bundle path does not exist", { path: resolvedPath });
+                continue;
+            }
+            try {
+                const contents = (0, fs_1.readFileSync)(resolvedPath);
+                certificates.push(contents);
+                fileCount += 1;
+            }
+            catch (error) {
+                (0, customAiDebug_1.logCustomAIWarning)("Failed to read CustomAI CA bundle file", {
+                    path: resolvedPath,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+    }
+    return {
+        certificates: certificates.length > 0 ? certificates : undefined,
+        fileCount,
+        hadInlineCertificates,
+    };
+};
+const resolveNodeAgentOptions = (opts) => {
+    if (opts.providedHttpsAgent) {
+        (0, customAiDebug_1.logCustomAIDebug)("Using caller-provided HTTPS agent for CustomAI");
+        return {};
+    }
+    const agentOptions = {
+        rejectUnauthorized: !opts.disableSSLVerification,
+    };
+    if (opts.caCertificates?.length) {
+        agentOptions.ca = opts.caCertificates;
+    }
+    const httpsAgent = new https_1.Agent(agentOptions);
+    (0, customAiDebug_1.logCustomAIDebug)("Constructed CustomAI HTTPS agent", {
+        rejectUnauthorized: agentOptions.rejectUnauthorized,
+        hasCustomCA: !!agentOptions.ca,
+    });
+    return {
+        httpsAgent,
+    };
+};
 __exportStar(require("../model"), exports);
 class CustomAI extends openai_1.default {
     constructor(opts = {}) {
@@ -36,6 +105,35 @@ class CustomAI extends openai_1.default {
                 fetch: typeof globalRef.fetch === "function" ? globalRef.fetch : undefined,
             }
             : {};
+        const disableSSLVerificationEnv = (0, env_1.getEnvVarBoolean)("CUSTOMAI_ALLOW_SELF_SIGNED_CERTS");
+        const disableAutoCertLoadingEnv = (0, env_1.getEnvVarBoolean)("CUSTOMAI_DISABLE_AUTO_CERT_LOADING");
+        const disableSSLVerification = opts.disableSSLVerification ?? (disableSSLVerificationEnv ?? false);
+        const disableAutoCertLoading = opts.disableAutoCertLoading ?? (disableAutoCertLoadingEnv ?? false);
+        const providedCertificates = normalizeCertificateInput(opts.caCertificates);
+        const providedCertificateCount = providedCertificates?.length ?? 0;
+        let caCertificates = providedCertificates;
+        const envCertificates = disableAutoCertLoading ? undefined : loadCertificatesFromEnv();
+        if (envCertificates?.certificates?.length) {
+            caCertificates = [...(caCertificates ?? []), ...envCertificates.certificates];
+        }
+        const usingCertificates = caCertificates?.length ?? 0;
+        const nodeAgentOptions = !isBrowser
+            ? resolveNodeAgentOptions({
+                disableSSLVerification,
+                caCertificates,
+                providedHttpsAgent: opts.httpsAgent,
+            })
+            : {};
+        (0, customAiDebug_1.logCustomAIDebug)("Resolved CustomAI TLS configuration", {
+            disableSSLVerification,
+            disableAutoCertLoading,
+            providedCertificates: providedCertificateCount,
+            envCertificateFiles: envCertificates?.fileCount ?? 0,
+            envInlineCertificates: envCertificates?.hadInlineCertificates ?? false,
+            finalCertificateCount: usingCertificates,
+            usingProvidedHttpsAgent: !!opts.httpsAgent,
+            applyingNodeAgentOptions: !isBrowser,
+        });
         const apiKey = opts.apiKey ?? (0, env_1.getEnvVar)("CUSTOMAI_API_KEY", "customai_dummy");
         const timeout = opts.timeout ?? (0, env_1.getEnvVarNumber)("CUSTOMAI_TIMEOUT", 30000);
         const maxRetries = opts.maxRetries ?? (0, env_1.getEnvVarNumber)("CUSTOMAI_MAX_RETRIES", 3);
@@ -52,6 +150,7 @@ class CustomAI extends openai_1.default {
         super({
             ...opts,
             ...browserOptions,
+            ...nodeAgentOptions,
             apiKey,
             timeout,
             maxRetries,

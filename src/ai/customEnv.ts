@@ -37,6 +37,14 @@ export function getCustomAIEnvironmentConfig(): CustomAIEnvironmentConfig {
 
   const completionsValues = COMPLETIONS_KEYS.map((key) => captureValue(key, trim(getEnvVar(key))));
   const baseUrl = captureValue('CUSTOMAI_BASE_URL', trim(getEnvVar('CUSTOMAI_BASE_URL')));
+  captureValue('CUSTOMAI_ALLOW_SELF_SIGNED_CERTS', trim(getEnvVar('CUSTOMAI_ALLOW_SELF_SIGNED_CERTS')));
+  captureValue('CUSTOMAI_DISABLE_AUTO_CERT_LOADING', trim(getEnvVar('CUSTOMAI_DISABLE_AUTO_CERT_LOADING')));
+  captureValue('CUSTOMAI_CA_BUNDLE_PATH', trim(getEnvVar('CUSTOMAI_CA_BUNDLE_PATH')));
+  const inlineCaBundle = getEnvVar('CUSTOMAI_CA_BUNDLE');
+  captureValue(
+    'CUSTOMAI_CA_BUNDLE',
+    inlineCaBundle ? `<inline bundle len=${inlineCaBundle.length}>` : ''
+  );
 
   const explicitEndpoint = completionsValues.find(Boolean);
   const endpoint = explicitEndpoint || buildEndpointFromBase(baseUrl);

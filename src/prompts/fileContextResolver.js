@@ -1,29 +1,5 @@
-import { Dirent } from 'fs';
-import * as fsPromises from 'fs/promises';
-import * as path from 'path';
-
-interface StemMatch {
-  path: string;
-  score: number;
-}
-
-export interface FileContextResolverOptions {
-  /**
-   * Absolute directories that should be searched when resolving references.
-   */
-  readonly roots: readonly string[];
-  /**
-   * Maximum number of files that will be visited when searching by filename only.
-   */
-  readonly maxSearchEntries?: number;
-}
-
-export interface FileContextResult {
-  readonly absolutePath: string;
-  readonly displayPath: string;
-  readonly line: number;
-  readonly snippet: string;
-}
+const fsPromises = require('fs/promises');
+const path = require('path');
 
 const STEM_EXTENSION_PRIORITY = [
   '.py',
@@ -53,16 +29,14 @@ const STEM_EXTENSION_PRIORITY = [
   '.txt'
 ];
 
-export class FileContextResolver {
-  private readonly roots: string[];
-  private readonly maxSearchEntries: number;
-
-  constructor(options: FileContextResolverOptions) {
-    this.roots = options.roots.map((root) => path.resolve(root));
-    this.maxSearchEntries = options.maxSearchEntries ?? 2000;
+class FileContextResolver {
+  constructor(options) {
+    const roots = Array.isArray(options?.roots) ? options.roots : [];
+    this.roots = roots.map((root) => path.resolve(root));
+    this.maxSearchEntries = options?.maxSearchEntries ?? 2000;
   }
 
-  async resolve(referencePath: string, line: number): Promise<FileContextResult | undefined> {
+  async resolve(referencePath, line) {
     if (!referencePath) {
       return undefined;
     }
@@ -106,7 +80,7 @@ export class FileContextResolver {
     }
   }
 
-  private makeDisplayPath(resolvedPath: string): string {
+  makeDisplayPath(resolvedPath) {
     for (const root of this.roots) {
       if (resolvedPath.startsWith(root)) {
         return path.relative(root, resolvedPath) || path.basename(resolvedPath);
@@ -116,7 +90,7 @@ export class FileContextResolver {
     return resolvedPath;
   }
 
-  private async findFile(referencePath: string): Promise<string | undefined> {
+  async findFile(referencePath) {
     if (path.isAbsolute(referencePath)) {
       if (await this.exists(referencePath)) {
         return referencePath;
@@ -159,7 +133,7 @@ export class FileContextResolver {
     }
 
     visited = 0;
-    let bestMatch: StemMatch | undefined;
+    let bestMatch;
 
     for (const root of this.roots) {
       const match = await this.walkForFileByStem(root, stem, () => {
@@ -186,7 +160,7 @@ export class FileContextResolver {
     return undefined;
   }
 
-  private scoreExtension(ext: string): number {
+  scoreExtension(ext) {
     const normalized = ext.toLowerCase();
     const index = STEM_EXTENSION_PRIORITY.indexOf(normalized);
 
@@ -197,24 +171,20 @@ export class FileContextResolver {
     return STEM_EXTENSION_PRIORITY.length + (normalized ? 1 : 0);
   }
 
-  private async walkForFileByStem(
-    directory: string,
-    stem: string,
-    shouldStop: () => boolean
-  ): Promise<StemMatch | undefined> {
+  async walkForFileByStem(directory, stem, shouldStop) {
     if (shouldStop()) {
       return undefined;
     }
 
-    let entries: Dirent[];
+    let entries;
 
     try {
       entries = await fsPromises.readdir(directory, { withFileTypes: true });
-    } catch {
+    } catch (error) {
       return undefined;
     }
 
-    let bestMatch: StemMatch | undefined;
+    let bestMatch;
 
     for (const entry of entries) {
       const fullPath = path.join(directory, entry.name);
@@ -230,7 +200,7 @@ export class FileContextResolver {
 
         if (entryStem === stem) {
           const score = this.scoreExtension(path.extname(entry.name));
-          const candidate: StemMatch = { path: fullPath, score };
+          const candidate = { path: fullPath, score };
 
           if (!bestMatch || candidate.score < bestMatch.score) {
             bestMatch = candidate;
@@ -246,16 +216,12 @@ export class FileContextResolver {
     return bestMatch;
   }
 
-  private async walkForFile(
-    directory: string,
-    filename: string,
-    shouldStop: () => boolean
-  ): Promise<string | undefined> {
+  async walkForFile(directory, filename, shouldStop) {
     if (shouldStop()) {
       return undefined;
     }
 
-    let entries: Dirent[];
+    let entries;
 
     try {
       entries = await fsPromises.readdir(directory, { withFileTypes: true });
@@ -284,25 +250,25 @@ export class FileContextResolver {
     return undefined;
   }
 
-  private async exists(filePath: string): Promise<boolean> {
+  async exists(filePath) {
     try {
       await fsPromises.access(filePath);
       return true;
-    } catch {
+    } catch (error) {
       return false;
     }
   }
 }
 
-const FUNCTION_HEADER_PATTERNS: RegExp[] = [
-  /^\s*(export\s+)?(async\s+)?function\s+\w+/,
+const FUNCTION_HEADER_PATTERNS = [
+  /^\s*(export\s+)?(async\s+)?function\s+\w+/, 
   /^\s*(export\s+)?(async\s+)?(const|let|var)\s+\w+\s*=\s*(async\s*)?\(/,
   /^\s*(export\s+)?(const|let|var)\s+\w+\s*=\s*(async\s*)?function\b/,
   /^\s*(export\s+)?class\s+\w+/,
   /^\s*def\s+\w+\s*\(.*\)\s*:/
 ];
 
-function extractFunctionBlock(lines: string[], targetLine: number, filePath: string): string {
+function extractFunctionBlock(lines, targetLine, filePath) {
   const headerIndex = findHeaderLine(lines, targetLine);
   const docStart = includeLeadingDocstring(lines, headerIndex);
   const ext = path.extname(filePath).toLowerCase();
@@ -316,7 +282,7 @@ function extractFunctionBlock(lines: string[], targetLine: number, filePath: str
   return lines.slice(docStart, end + 1).join('\n');
 }
 
-function findHeaderLine(lines: string[], start: number): number {
+function findHeaderLine(lines, start) {
   for (let index = start; index >= 0; index -= 1) {
     const text = lines[index];
 
@@ -332,7 +298,7 @@ function findHeaderLine(lines: string[], start: number): number {
   return start;
 }
 
-function includeLeadingDocstring(lines: string[], headerIndex: number): number {
+function includeLeadingDocstring(lines, headerIndex) {
   let index = headerIndex - 1;
   let docStart = headerIndex;
 
@@ -362,7 +328,7 @@ function includeLeadingDocstring(lines: string[], headerIndex: number): number {
   return docStart;
 }
 
-function findBraceLanguageBlockEnd(lines: string[], headerIndex: number): number {
+function findBraceLanguageBlockEnd(lines, headerIndex) {
   let depth = 0;
   let end = headerIndex;
   let sawOpeningBrace = false;
@@ -389,13 +355,13 @@ function findBraceLanguageBlockEnd(lines: string[], headerIndex: number): number
   return end;
 }
 
-function findPythonBlockEnd(lines: string[], headerIndex: number): number {
+function findPythonBlockEnd(lines, headerIndex) {
   const header = lines[headerIndex];
   const indentMatch = /^\s*/.exec(header) ?? [''];
   const headerIndent = indentMatch[0].length;
   let end = headerIndex;
   let inDocstring = false;
-  let docstringDelimiter: string | undefined;
+  let docstringDelimiter;
 
   for (let index = headerIndex + 1; index < lines.length; index += 1) {
     const text = lines[index];
@@ -424,7 +390,7 @@ function findPythonBlockEnd(lines: string[], headerIndex: number): number {
       continue;
     }
 
-    const indentLength = ( /^\s*/.exec(text) ?? [''])[0].length;
+    const indentLength = (/^\s*/.exec(text) ?? [''])[0].length;
 
     if (indentLength <= headerIndent && /^[^#]/.test(trimmed)) {
       break;
@@ -435,3 +401,7 @@ function findPythonBlockEnd(lines: string[], headerIndex: number): number {
 
   return end;
 }
+
+module.exports = {
+  FileContextResolver
+};

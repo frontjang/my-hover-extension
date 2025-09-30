@@ -1,10 +1,8 @@
-import * as assert from 'assert';
-import { ProviderConfig } from '../../ai/types';
-import { buildPromptPayload } from '../../prompts/builder';
-import { LineProcessor, LineProcessorRegistry } from '../../prompts';
+const assert = require('assert');
+const { buildPromptPayload, LineProcessorRegistry } = require('../../prompts');
 
 describe('Prompt builder', () => {
-  const baseConfig: ProviderConfig = {
+  const baseConfig = {
     provider: 'gemini',
     geminiEndpoint: '',
     geminiModel: '',
@@ -37,7 +35,7 @@ describe('Prompt builder', () => {
   });
 
   it('appends supporting context from registered processors', async () => {
-    const processors: LineProcessor[] = [
+    const processors = [
       {
         id: 'fileLineReference',
         async process() {

@@ -1,48 +1,28 @@
-import * as https from 'https';
-import * as vscode from 'vscode';
+const https = require('https');
 
-interface GeminiCandidate {
-  content?: {
-    parts?: { text?: string }[];
-  };
-}
-
-interface GeminiResponse {
-  candidates?: GeminiCandidate[];
-}
-
-export interface GeminiExplanationResult {
-  text?: string;
-  error?: string;
-}
-
-function coerceGeminiErrorMessage(statusCode: number | undefined, body: string): string {
+function coerceGeminiErrorMessage(statusCode, body) {
   if (!body) {
     return `Gemini request failed with status ${statusCode ?? 'unknown'}.`;
   }
 
   try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } };
-    const message = parsed.error?.message?.trim();
+    const parsed = JSON.parse(body);
+    const message = parsed?.error?.message?.trim();
 
     if (message) {
       return `Gemini request failed with status ${statusCode ?? 'unknown'}: ${message}`;
     }
-  } catch (parseError) {
+  } catch (error) {
     // Ignore JSON parsing issues and fall back to the raw body below.
   }
 
   const sanitized = body.length > 500 ? `${body.slice(0, 497)}...` : body;
-  return `Gemini request failed with status ${statusCode ?? 'unknown'}: ${sanitized.trim() || 'Unknown error.'}`;
+  return `Gemini request failed with status ${statusCode ?? 'unknown'}: ${
+    sanitized.trim() || 'Unknown error.'
+  }`;
 }
 
-export async function fetchGeminiExplanation(
-  prompt: string,
-  baseEndpoint: string,
-  model: string,
-  apiKey: string,
-  token: vscode.CancellationToken
-): Promise<GeminiExplanationResult> {
+async function fetchGeminiExplanation(prompt, baseEndpoint, model, apiKey, token) {
   if (!prompt.trim()) {
     return { error: 'Prompt text was empty.' };
   }
@@ -70,7 +50,7 @@ export async function fetchGeminiExplanation(
 
   const url = new URL(`${baseEndpoint.replace(/\/$/, '')}/${model}:generateContent`);
 
-  return new Promise<GeminiExplanationResult>((resolve) => {
+  return new Promise((resolve) => {
     const req = https.request(
       url,
       {
@@ -82,7 +62,7 @@ export async function fetchGeminiExplanation(
         }
       },
       (res) => {
-        const chunks: Buffer[] = [];
+        const chunks = [];
 
         res.on('data', (chunk) => {
           chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
@@ -93,7 +73,7 @@ export async function fetchGeminiExplanation(
 
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             try {
-              const json = JSON.parse(body) as GeminiResponse;
+              const json = JSON.parse(body);
               const candidate = json.candidates?.find((c) => c.content?.parts?.length);
               const text = candidate?.content?.parts
                 ?.map((part) => part.text ?? '')
@@ -133,3 +113,7 @@ export async function fetchGeminiExplanation(
     req.end();
   });
 }
+
+module.exports = {
+  fetchGeminiExplanation
+};
